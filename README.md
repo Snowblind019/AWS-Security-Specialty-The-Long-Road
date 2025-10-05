@@ -50,6 +50,8 @@ By the Will of the Lord, when the time comes to retake the exam, my goal is to u
 
 ---
 
+## AWS SCS Domains & Progress
+
 | Domain | Title | Status | Notes | Diagrams |
 |--------|-------|--------|-------|----------|
 | 1 | Threat Detection and Incident Response | 🟪 In Progress | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Notes) | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Diagrams) |
