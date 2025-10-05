@@ -8,7 +8,7 @@
 
 ---
 
-On September 15th, 2025, I took my first attempt at the AWS Certified Security – Specialty exam.  
+On September 15th, 2025, I took my first attempt at the AWS Certified Security – Specialty exam.
 I didn’t get the result I wanted — but I got something better.
 
 What I gained was more valuable than a passing score: I discovered exactly where my understanding needed to grow.
@@ -21,52 +21,50 @@ This repository documents my second attempt. Not as a simple retry, but as a **r
 
 > If it confused me on the exam, it’s going on a whiteboard and getting diagrammed to death.
 
-So what changed? My mindset.  
-I realized passing the test isn’t the goal — **mastery** is.  
+So what changed? My mindset.
+I realized passing the test isn’t the goal — **mastery** is.
 I’m not studying for a badge. I’m studying for the moment someone depends on me to solve a real problem.
 
-This repo isn’t about proving I’m smart.  
+This repo isn’t about proving I’m smart.
 It’s about proving I don’t quit.
 
-Thanks for being part of the journey.  
+Thanks for being part of the journey.
 Whether you're on your first attempt or your fifth — keep going.
 
-> You're never a failure unless you start blaming others.  
-> Own your mistakes. Learn from them. Fix them.  
+> You're never a failure unless you start blaming others.
+> Own your mistakes. Learn from them. Fix them.
 > **And do the work — so next time, there’s nothing left to blame.**
 
 ---
 
 ## What's Next
 
-Here’s the plan:  
+Here’s the plan:
 I’m taking every domain in the AWS SCS blueprint and diving **deep** into it. I’m not just reviewing — I’m rebuilding my mental model from the ground up.
 
-- I’ll create detailed **Lucidchart diagrams** for each service and concept  
-- I’ll pair each diagram with **hands-on practice using the AWS CLI and Console**, where I’ll simulate real-world scenarios  
-- I’ll explain everything in **my own words**, using real-world analogies where possible  
+- I’ll create detailed **Lucidchart diagrams** for each service and concept
+- I’ll explain everything in **my own words**, using real-world analogies where possible
 - I’ll repeat the process until I can confidently say: *I don’t just know it — I understand it*
 
 By the Will of the Lord, when the time comes to retake the exam, my goal is to understand every core AWS security service at a **low level** — how it works, how it integrates, and how it protects real-world systems — both **theoretically and visually**
 
 ---
 
-## AWS SCS Domains & Progress
-
-| Domain | Title | Status | Notes | Diagrams | Hands-On |
+| Domain | Title | Status | Notes | Diagrams |
 |--------|-------|--------|----------------|---------|----------|
-| 1 | Threat Detection and Incident Response | 🟨 In Progress | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Notes) | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Diagrams) | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Hands-On) |
-| 2 | Security Logging and Monitoring | ⬜ Not Started | ❌ | ❌ | ❌ |
-| 3 | Infrastructure Security | ⬜ Not Started | ❌ | ❌ | ❌ |
-| 4 | Identity and Access Management | ⬜ Not Started | ❌ | ❌ | ❌ |
-| 5 | Data Protection | ⬜ Not Started | ❌ | ❌ | ❌ |
-| 6 | Management and Security Governance | ⬜ Not Started | ❌ | ❌ | ❌ |
+| 1 | Threat Detection and Incident Response | 🟪 In Progress | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Notes) | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Diagrams) |
+| 2 | Security Logging and Monitoring | 🟪 In Progress | [View](./Domain%202%20-%20Security%20Logging%20and%20Monitoring/Notes) | [View](./Domain%202%20-%20Security%20Logging%20and%20Monitoring/Diagrams) |
+| 3 | Infrastructure Security | 🟪 In Progress | [View](./Domain%203%20-%20Infrastructure%20Security/Notes) | [View](./Domain%203%20-%20Infrastructure%20Security/Diagrams) |
+| 4 | Identity and Access Management | 🟪 In Progress | [View](./Domain%204%20-%20Identity%20and%20Access%20Management/Notes) | [View](./Domain%204%20-%20Identity%20and%20Access%20Management/Diagrams) |
+| 5 | Data Protection | 🟪 In Progress | [View](./Domain%205%20-%20Data%20Protection/Notes) | [View](./Domain%205%20-%20Data%20Protection/Diagrams) |
+| 6 | Management and Security Governance | 🟪 In Progress | [View](./Domain%206%20-%20Management%20and%20Security%20Governance/Notes) | [View](./Domain%206%20-%20Management%20and%20Security%20Governance/Diagrams) |
+| 7 | Other Services | 🟪 In Progress | [View](./Other%20Services/Notes) | [View](./Other%20Services/Diagrams) |
 
-> ✅ = Complete 🟨 = In Progress ❌ = Not Started
+> ✔️ = Complete 🟪 = In Progress ✖️ = Not Started
 
 ---
 
-A journey of a thousand miles begins with a single step — and the hardest one is always the first.  
+A journey of a thousand miles begins with a single step — and the hardest one is always the first.
 So here it is. **Step one. Let’s go.**
 
 ---
