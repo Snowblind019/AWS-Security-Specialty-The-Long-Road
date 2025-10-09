@@ -60,7 +60,7 @@ Over the next few weeks, I will study and retake the exam, and once that’s beh
 |--------|-------|--------|-------|----------|
 | 1 | Threat Detection and Incident Response | ✔️ Complete | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Notes) | On-Hold |
 | 2 | Security Logging and Monitoring | ✔️ Complete | [View](./Domain%202%20-%20Security%20Logging%20and%20Monitoring/Notes) | On-Hold |
-| 3 | Infrastructure Security | ✔️ Complete | [View](./Domain%203%20-%20Infrastructure%20Security/Notes) | [On-Hold |
+| 3 | Infrastructure Security | ✔️ Complete | [View](./Domain%203%20-%20Infrastructure%20Security/Notes) | On-Hold |
 | 4 | Identity and Access Management | ✔️ Complete | [View](./Domain%204%20-%20Identity%20and%20Access%20Management/Notes) | On-Hold |
 | 5 | Data Protection | ✔️ Complete | [View](./Domain%205%20-%20Data%20Protection/Notes) | On-Hold |
 | 6 | Management and Security Governance | ✔️ Complete | [View](./Domain%206%20-%20Management%20and%20Security%20Governance/Notes) | On-Hold |
