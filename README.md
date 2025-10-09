@@ -48,19 +48,23 @@ I’m taking every domain in the AWS SCS blueprint and diving **deep** into it. 
 
 By the Will of the Lord, when the time comes to retake the exam, my goal is to understand every core AWS security service at a **low level** — how it works, how it integrates, and how it protects real-world systems — both **theoretically and visually**
 
+Edit: I’ve realized the diagramming is going to take longer than I expected. Some of these services run deep, and visualizing them properly isn’t something I want to rush. So here's how I'm pivoting:
+
+Over the next few weeks, I will study and retake the exam, and once that’s behind me — I’ll return to finish the diagramming with full focus and clarity. So for now, I am putting the diagramming on hold. 
+
 ---
 
 ## AWS SCS Domains & Progress
 
 | Domain | Title | Status | Notes | Diagrams |
 |--------|-------|--------|-------|----------|
-| 1 | Threat Detection and Incident Response | 🟪 In Progress | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Notes) | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Diagrams) |
-| 2 | Security Logging and Monitoring | 🟪 In Progress | [View](./Domain%202%20-%20Security%20Logging%20and%20Monitoring/Notes) | [View](./Domain%202%20-%20Security%20Logging%20and%20Monitoring/Diagrams) |
-| 3 | Infrastructure Security | 🟪 In Progress | [View](./Domain%203%20-%20Infrastructure%20Security/Notes) | [View](./Domain%203%20-%20Infrastructure%20Security/Diagrams) |
-| 4 | Identity and Access Management | 🟪 In Progress | [View](./Domain%204%20-%20Identity%20and%20Access%20Management/Notes) | [View](./Domain%204%20-%20Identity%20and%20Access%20Management/Diagrams) |
-| 5 | Data Protection | 🟪 In Progress | [View](./Domain%205%20-%20Data%20Protection/Notes) | [View](./Domain%205%20-%20Data%20Protection/Diagrams) |
-| 6 | Management and Security Governance | 🟪 In Progress | [View](./Domain%206%20-%20Management%20and%20Security%20Governance/Notes) | [View](./Domain%206%20-%20Management%20and%20Security%20Governance/Diagrams) |
-| 7 | Other Services | 🟪 In Progress | [View](./Other%20Services/Notes) | [View](./Other%20Services/Diagrams) |
+| 1 | Threat Detection and Incident Response | ✔️ Complete | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Notes) | On-Hold |
+| 2 | Security Logging and Monitoring | ✔️ Complete | [View](./Domain%202%20-%20Security%20Logging%20and%20Monitoring/Notes) | On-Hold |
+| 3 | Infrastructure Security | ✔️ Complete | [View](./Domain%203%20-%20Infrastructure%20Security/Notes) | [On-Hold |
+| 4 | Identity and Access Management | ✔️ Complete | [View](./Domain%204%20-%20Identity%20and%20Access%20Management/Notes) | On-Hold |
+| 5 | Data Protection | ✔️ Complete | [View](./Domain%205%20-%20Data%20Protection/Notes) | On-Hold |
+| 6 | Management and Security Governance | ✔️ Complete | [View](./Domain%206%20-%20Management%20and%20Security%20Governance/Notes) | On-Hold |
+| 7 | Other Services | ✔️ Complete | [View](./Other%20Services/Notes) | On-Hold |
 
 > ✔️ = Complete 🟪 = In Progress ✖️ = Not Started
 
