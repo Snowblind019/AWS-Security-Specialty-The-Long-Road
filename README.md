@@ -51,10 +51,10 @@ By the Will of the Lord, when the time comes to retake the exam, my goal is to u
 
 Edit: I’ve realized the diagramming is going to take longer than I expected. Some of these services run deep, and visualizing them properly isn’t something I want to rush. So here's how I'm pivoting:
 
-Over the next few weeks, I will study and retake the exam, and once that’s behind me — I’ll return to finish the diagramming with full focus and clarity. So for now, I am putting the diagramming on hold. 
+Over the next few weeks, I will study and retake the exam, and once that’s behind me — I’ll return to finish the diagramming with full focus and clarity. So for now, I am putting the diagramming on hold.
 
-I've created a sample diagram to illustrate the visual format and structure I’ll be doing for future diagrams after I pass the exam with the Lord's help.  
-You can view the diagram here: [Athena Diagram](Other%20Services/Diagrams/Athena.md)
+I've created a sample diagram to illustrate the visual format and structure I’ll be doing for future diagrams after I pass the exam with the Lord's help.
+You can view the diagram here: [Athena Diagram](/Diagrams/Athena.md)
 
 
 ---
