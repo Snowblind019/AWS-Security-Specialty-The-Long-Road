@@ -52,6 +52,10 @@ Edit: I’ve realized the diagramming is going to take longer than I expected. S
 
 Over the next few weeks, I will study and retake the exam, and once that’s behind me — I’ll return to finish the diagramming with full focus and clarity. So for now, I am putting the diagramming on hold. 
 
+I've created a sample diagram to illustrate the visual format and structure I’ll be doing for future diagrams after I pass the exam with the Lord's help.  
+You can view it here: [Athena Diagram](Other%20Services/Diagrams/Athena.md)
+
+
 ---
 
 ## AWS SCS Domains & Progress
