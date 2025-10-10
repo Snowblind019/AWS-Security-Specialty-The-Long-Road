@@ -46,6 +46,8 @@ I’m taking every domain in the AWS SCS blueprint and diving **deep** into it. 
 - I’ll explain everything in **my own words**, using real-world analogies where possible
 - I’ll repeat the process until I can confidently say: *I don’t just know it — I understand it*
 
+As a side note, I like winter and like using wintery names in examples, hence you'll see me using Snowy, Winterday, and Blizzard as examples quite alot (in users, companies, roles, etc.)
+
 By the Will of the Lord, when the time comes to retake the exam, my goal is to understand every core AWS security service at a **low level** — how it works, how it integrates, and how it protects real-world systems — both **theoretically and visually**
 
 Edit: I’ve realized the diagramming is going to take longer than I expected. Some of these services run deep, and visualizing them properly isn’t something I want to rush. So here's how I'm pivoting:
