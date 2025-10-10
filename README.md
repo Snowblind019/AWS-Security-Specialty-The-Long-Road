@@ -63,13 +63,13 @@ You can view the diagram here: [Athena Diagram](/Diagrams/Athena.md)
 
 | Domain | Title | Status | Notes | Diagrams |
 |--------|-------|--------|-------|----------|
-| 1 | Threat Detection and Incident Response | ✔️ Complete | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Notes) | On-Hold |
-| 2 | Security Logging and Monitoring | ✔️ Complete | [View](./Domain%202%20-%20Security%20Logging%20and%20Monitoring/Notes) | On-Hold |
-| 3 | Infrastructure Security | ✔️ Complete | [View](./Domain%203%20-%20Infrastructure%20Security/Notes) | On-Hold |
-| 4 | Identity and Access Management | ✔️ Complete | [View](./Domain%204%20-%20Identity%20and%20Access%20Management/Notes) | On-Hold |
-| 5 | Data Protection | ✔️ Complete | [View](./Domain%205%20-%20Data%20Protection/Notes) | On-Hold |
-| 6 | Management and Security Governance | ✔️ Complete | [View](./Domain%206%20-%20Management%20and%20Security%20Governance/Notes) | On-Hold |
-| 7 | Other Services | ✔️ Complete | [View](./Other%20Services/Notes) | On-Hold |
+| 1 | Threat Detection and Incident Response | ✔️ Complete | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response) | On-Hold |
+| 2 | Security Logging and Monitoring | ✔️ Complete | [View](./Domain%202%20-%20Security%20Logging%20and%20Monitoring) | On-Hold |
+| 3 | Infrastructure Security | ✔️ Complete | [View](./Domain%203%20-%20Infrastructure%20Security) | On-Hold |
+| 4 | Identity and Access Management | ✔️ Complete | [View](./Domain%204%20-%20Identity%20and%20Access%20Management) | On-Hold |
+| 5 | Data Protection | ✔️ Complete | [View](./Domain%205%20-%20Data%20Protection) | On-Hold |
+| 6 | Management and Security Governance | ✔️ Complete | [View](./Domain%206%20-%20Management%20and%20Security%20Governance) | On-Hold |
+| 7 | Other Services | ✔️ Complete | [View](./Other%20Services) | On-Hold |
 
 > ✔️ = Complete 🟪 = In Progress ✖️ = Not Started
 
