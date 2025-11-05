@@ -1,4 +1,4 @@
-# AWS SCS – Mastery Through Failure
+# AWS Security Specialty – The Long Road
 
 ![Status](https://img.shields.io/badge/Status-In%20Progress-yellow)
 ![Focus](https://img.shields.io/badge/Focus-AWS%20Cloud%20Security-blue)
@@ -7,76 +7,109 @@
 
 ---
 
-On September 15th, 2025, I took my first attempt at the AWS Certified Security – Specialty exam.
-I didn’t get the result I wanted — but I got something better.
+This repository documents my journey to pass the AWS Certified Security Specialty exam.
 
-What I gained was more valuable than a passing score: I discovered exactly where my understanding needed to grow.
+It's not the journey I thought it would be.
 
-> Failure didn’t stop me. It started something deeper: real understanding.
+## Attempt #1: September 15th, 2025
 
-This isn’t the end of the story — it’s the chapter where I get back up.
+I failed.
 
-This repository documents my second attempt. Not as a simple retry, but as a **rebuild** — a re-architecture of everything I thought I knew, and everything I didn’t. I’ll be diagramming, annotating, and explaining every area I struggled with — and even the areas I did well in — until I reach a level of clarity, instinct, and muscle memory that goes far beyond exam prep.
+Not close. Just... failed.
 
-> If it confused me on the exam, it’s going on a whiteboard and getting diagrammed to death.
+I thought I was ready. I'd done Stephane Maarek's course, Adrian Cantrill's deep dives, hundreds of practice questions. I knew the services. I understood the concepts. Or at least I thought I did.
 
-So what changed? My mindset.
-I realized passing the test isn’t the goal — **mastery** is.
-I’m not studying for a badge. I’m studying for the moment someone depends on me to solve a real problem.
+The exam proved otherwise.
 
-This repo isn’t about proving I’m smart.
-It’s about proving I don’t quit.
+But that failure taught me something: **I wasn't preparing to understand AWS security. I was preparing to pass a test.** And those aren't the same thing.
 
-Thanks for being part of the journey.
-Whether you're on your first attempt or your fifth — keep going.
+So I changed my approach. I started diagramming services. I rebuilt my understanding from first principles. I focused on *why* things work the way they do, not just *what* they do.
 
-> You're never a failure unless you start blaming others.
-> Own your mistakes. Learn from them. Fix them.
-> **And do the work — so next time, there’s nothing left to blame.**
+I convinced myself that this time, I'd actually learned the lesson.
+
+## Attempt #2: November 4th, 2025
+
+I failed again.
+
+This one hurt more because I'd done everything "right." I'd studied differently. I'd gone deeper. I'd put in the work.
+
+But here's what I missed: **understanding theory isn't the same as being able to implement it.**
+
+I could explain how KMS works. I could diagram GuardDuty's architecture. But when the exam threw me scenarios involving Python automation, Terraform deployments, or SQL-based log analysis — tools I'd heard of but never actually used — I realized my knowledge was still one layer too shallow.
+
+I knew *about* these things. I didn't know how to *do* them.
+
+That's what's changing now.
+
+## What Happens Next
+
+The SCS-C03 exam launches in December. That gives me time — real time — to stop studying for an exam and start training for a career.
+
+Here's the plan:
+
+**Stop reading. Start building.**
+- Write Python scripts for security automation
+- Deploy infrastructure with Terraform
+- Build actual AWS environments and secure them
+- Analyze CloudTrail logs with SQL
+- Create real projects, not just follow tutorials
+
+**Visual learning that works:**
+- Diagram every service I touch in Lucidchart
+- Document architectures in plain language
+- Build a reference library I can actually use
+- (You'll see winter-themed names like Snowy, Winterday, and Blizzard throughout — it's just how my brain organizes examples)
+
+**Go from theory to implementation:**
+- Not "what does this service do" → "when would I use this and how would I deploy it"
+- Not "what are the features" → "how do I secure this in production"
+- Not "can I pass the exam" → "can I do the job"
 
 ---
 
-## What's Next
+## Update – November 2025
 
-Here’s the plan:
-I’m taking every domain in the AWS SCS blueprint and diving **deep** into it. I’m not just reviewing — I’m rebuilding my mental model from the ground up.
+New priority from work: I've been required to obtain my CCNA certification, so I'm putting the AWS SCS on hold for now.
 
-- I’ll create detailed **Lucidchart diagrams** for each service and concept
-- I’ll explain everything in **my own words**, using real-world analogies where possible
-- I’ll repeat the process until I can confidently say: *I don’t just know it — I understand it*
+It's not the direction I planned to go right now, but it's what's needed. Once the CCNA is behind me, I'll be back to finish what I started here — probably with a clearer head after the break.
 
-As a side note, I like winter and like using wintery names in examples, hence you'll see me using Snowy, Winterday, and Blizzard as examples quite alot (in users, companies, roles, etc.)
-
-By the Will of the Lord, when the time comes to retake the exam, my goal is to understand every core AWS security service at a **low level** — how it works, how it integrates, and how it protects real-world systems — both **theoretically and visually**
-
-Edit: I’ve realized the diagramming is going to take longer than I expected. Some of these services run deep, and visualizing them properly isn’t something I want to rush. So here's how I'm pivoting:
-
-Over the next few weeks, I will study and retake the exam, and once that’s behind me — I’ll return to finish the diagramming with full focus and clarity. So for now, I am putting the diagramming on hold.
-
-I've created a sample diagram to illustrate the visual format and structure I’ll be doing for future diagrams after I pass the exam with the Lord's help.
-You can view the diagram here: [Athena Diagram](/Diagrams/Athena.md)
-
+The SCS journey isn't over. Just hitting pause.
 
 ---
 
-## AWS SCS Domains & Progress
+## Why I'm Still Here
+
+I could have quit after the first failure. I definitely thought about quitting after the second.
+
+But someone once said that brick walls aren't there to keep us out. They're there to show how badly we want something — to stop the people who don't want it badly enough.
+
+I want this badly enough to fail twice and keep building.
+
+> *"Success is not final, failure is not fatal: it is the courage to continue that counts."*  
+> — Winston Churchill
+
+This repository started as a way to document my second attempt.  
+Now it's proof that I'm willing to do whatever it takes to get this right — even if it means admitting I was wrong, starting over, and failing again before I succeed.
+
+I don't know how long this will take. But I know I'm not stopping until I get there.
+
+By the Will of the Lord, I'll pass the SCS-C03. And when I do, I'll actually be ready for what comes next.
+
+---
+
+## Study Progress
 
 | Domain | Title | Status | Notes | Diagrams |
 |--------|-------|--------|-------|----------|
-| 1 | Threat Detection and Incident Response | ✔️ Complete | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response) | On-Hold |
-| 2 | Security Logging and Monitoring | ✔️ Complete | [View](./Domain%202%20-%20Security%20Logging%20and%20Monitoring) | On-Hold |
-| 3 | Infrastructure Security | ✔️ Complete | [View](./Domain%203%20-%20Infrastructure%20Security) | On-Hold |
-| 4 | Identity and Access Management | ✔️ Complete | [View](./Domain%204%20-%20Identity%20and%20Access%20Management) | On-Hold |
-| 5 | Data Protection | ✔️ Complete | [View](./Domain%205%20-%20Data%20Protection) | On-Hold |
-| 6 | Management and Security Governance | ✔️ Complete | [View](./Domain%206%20-%20Management%20and%20Security%20Governance) | On-Hold |
-| 7 | Other Services | ✔️ Complete | [View](./Other%20Services) | On-Hold |
+| 1 | Threat Detection and Incident Response | ✔️ Complete | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response) | 🟪 In-Progress |
+| 2 | Security Logging and Monitoring | ✔️ Complete | [View](./Domain%202%20-%20Security%20Logging%20and%20Monitoring) | 🟪 In-Progress |
+| 3 | Infrastructure Security | ✔️ Complete | [View](./Domain%203%20-%20Infrastructure%20Security) | 🟪 In-Progress |
+| 4 | Identity and Access Management | ✔️ Complete | [View](./Domain%204%20-%20Identity%20and%20Access%20Management) | 🟪 In-Progress |
+| 5 | Data Protection | ✔️ Complete | [View](./Domain%205%20-%20Data%20Protection) | 🟪 In-Progress |
+| 6 | Management and Security Governance | ✔️ Complete | [View](./Domain%206%20-%20Management%20and%20Security%20Governance) | 🟪 In-Progress |
+| 7 | Other Services | ✔️ Complete | [View](./Other%20Services) | 🟪 In-Progress |
 
 > ✔️ = Complete 🟪 = In Progress ✖️ = Not Started
-
----
-
-A journey of a thousand miles begins with a single step — and the hardest one is always the first.
-So here it is. **Step one. Let’s go.**
 
 ---
 
