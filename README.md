@@ -69,11 +69,29 @@ Here's the plan:
 
 ## Update – November 2025
 
-New priority from work: I've been required to obtain my CCNA certification, so I'm putting the AWS SCS on hold for now.
+Work priorities shifted unexpectedly and pulled my focus elsewhere for the past few weeks. The AWS SCS is on hold for now — not the direction I planned, but sometimes that's how it goes.
 
-It's not the direction I planned to go right now, but it's what's needed. Once the CCNA is behind me, I'll be back to finish what I started here — probably with a clearer head after the break.
+Once things settle, I'll be back to finish what I started here. Probably with a clearer head after the break.
 
 The SCS journey isn't over. Just hitting pause.
+
+---
+
+## Update – December 2025
+
+Work priorities shifted unexpectedly and pulled my focus elsewhere for the past few weeks. The AWS SCS journey was put on hold — not the direction I planned, but sometimes that's how it goes.
+
+I'm back now. And I'm actually doing the thing I said I'd do.
+
+I am first learning Python, Terraform, and SQL, and then putting it into practice and building with them.
+
+Projects I will be working on:
+
+- S3 Security Auditor — Python script to scan buckets for public access, missing encryption, disabled logging
+- Security Group Auditor — Python script to find overly permissive rules and unused groups
+- CloudTrail Log Analyzer — Python and SQL to analyze CloudTrail logs for security events and suspicious activity
+
+This repository will update as I go. No timeline. Just progress.
 
 ---
 
@@ -96,6 +114,14 @@ I don't know how long this will take. But I know I'm not stopping until I get th
 By the Will of the Lord, I'll pass the SCS-C03. And when I do, I'll actually be ready for what comes next.
 
 ---
+
+## Current Projects
+
+| Project | Language/Tool | Status | Repository |
+|---------|---------------|--------|------------|
+| S3 Security Auditor | Python, Terraform | ✖️ Not Started | ✖️ Not Started |
+| Security Group Auditor | Python, Terraform | ✖️ Not Started | ✖️ Not Started |
+| CloudTrail Log Analyzer | Python, SQL | ✖️ Not Started | ✖️ Not Started |
 
 ## Study Progress
 
