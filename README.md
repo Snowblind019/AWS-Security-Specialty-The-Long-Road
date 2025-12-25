@@ -126,7 +126,7 @@ I had Claude generate scenarios around networking topics since those are what I 
 
 | Project | Language/Tool | Status | Repository |
 |---------|---------------|--------|------------|
-| Skill Development | Python, Boto3 | 🟪 In Progress | [View](./Skill-Development) |
+| Skill Development | Python, Boto3 | 🟪 In Progress | [View](./Skill%20Development) |
 | S3 Security Auditor | Python, Terraform | ✖️ Not Started | ✖️ Not Started |
 | Security Group Auditor | Python, Terraform | ✖️ Not Started | ✖️ Not Started |
 | CloudTrail Log Analyzer | Python, SQL | ✖️ Not Started | ✖️ Not Started |
