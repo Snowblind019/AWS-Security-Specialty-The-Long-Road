@@ -3,7 +3,9 @@
 ![Status](https://img.shields.io/badge/Status-In%20Progress-yellow)
 ![Focus](https://img.shields.io/badge/Focus-AWS%20Cloud%20Security-blue)
 ![Goal](https://img.shields.io/badge/Certification-AWS%20SCS%20--%20Specialty-8A2BE2)
-![IDE](https://img.shields.io/badge/IDE-VS%20Code-007ACC)
+![SDK](https://img.shields.io/badge/SDK-boto3-orange)
+![Learning](https://img.shields.io/badge/Learning-Terraform-623CE4)
+![Learning](https://img.shields.io/badge/Learning-SQL-4479A1)
 
 ---
 
@@ -119,6 +121,22 @@ I have finished learning Python fundamentals and have started learning the Boto3
 I'm a hands-on learner, so I'm having Claude generate scenario-based challenges for me to code based on what I've learned. I write the code and get it graded by Claude. When something doesn't make sense, I ask for explanations and do more practice in that area until it sticks. This approach helps me retain information much better than just learning theory.
 
 I had Claude generate scenarios around networking topics since those are what I work with daily and am most familiar with. I've added them to this repo. I'll continue doing this for all future challenges.
+
+---
+
+## Update – January 6th, 2025
+
+As of now I've completed three hands-on boto3 projects: an automated backup system, a security group auditor, and database-backed web infrastructure with EC2, RDS, and VPC.
+
+I'll be honest, I was making this harder on myself than it needed to be. While learning these services, I was trying to memorize all the syntax alongside understanding the why behind every line, and it was genuinely tiring me out. Recently I was made aware that memorizing everything upfront isn't a reasonable goal to put on myself as the syntax will start sticking naturally the more I use it day to day. What I actually needed was to understand how the commands work and what they do, and get comfortable using documentation and searching to figure out how to build what I need.
+
+Once that clicked, I changed my approach. I worked through guided walkthroughs for S3, EC2, RDS, and VPC, typing everything out myself and asking questions on anything I didn't understand until it made sense. After that, I went through three mini-projects to see what it looks like when you tie multiple services together in one script. The first project combined S3 and EC2, the second brought in EC2, RDS, and VPC, and the third tied all four together. I learned so much more this way than I ever did trying to memorize syntax, and I wasn't getting burned out by it.
+
+Now that I have a deeper understanding of how these services work together, I'm moving on to Lambda and automation to automate things like S3 lifecycle events, RDS maintenance tasks, and VPC monitoring. Eventually I want to explore SNS, SQS, and other event-driven services.
+
+This work is also helping with the Security Specialty exam. Both times I've attempted it, there were boto3 related questions I struggled with. Learning all of this is really filling in those gaps, and continuing to build my knowledge will only make that foundation stronger.
+
+I'm genuinely enjoying this journey now. This feels like progress on its own.
 
 ---
 
