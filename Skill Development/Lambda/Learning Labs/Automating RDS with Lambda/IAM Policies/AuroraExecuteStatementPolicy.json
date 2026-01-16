@@ -1,0 +1,10 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": "rds-data:ExecuteStatement",
+            "Resource": "arn:aws:rds:us-west-2:522814732220:cluster:winter-cluster"
+        }
+    ]
+}
