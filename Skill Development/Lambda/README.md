@@ -42,4 +42,4 @@ These single-function automations led to multi-service architectures in `Advance
 
 ---
 
-**Note:** Security Automation functions are deployment-ready. Learning Labs contain hardcoded values and are for educational purposes.
+**Note:** Learning Labs contain hardcoded values and are for educational purposes.

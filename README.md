@@ -140,6 +140,22 @@ I'm genuinely enjoying this journey now. This feels like progress on its own.
 
 ---
 
+## Update – January 15th, 2025
+
+Lambda has been a game-changer for how I think about automation in AWS. I started with the learning labs to understand how Lambda actually works and answer questions like: how do S3 events trigger functions? What does a CloudWatch schedule look like? How do you write IAM policies that give Lambda exactly what it needs? I built functions for EC2 backups, Aurora Serverless CSV imports, real-time S3 validation, and VPC resource cleanup—not because I needed those specific tools, but because they taught me the patterns that show up everywhere.
+
+Once I had the basics down, I moved to security automation, creating six functions that handle real-world compliance and cost optimization scenarios: cleaning up old snapshots, auditing tags, scanning for public S3 buckets, finding unused security groups, flagging old IAM keys, and auto-stopping instances. These weren't just exercises, they're the kind of functions you'd actually deploy in production.
+
+After getting comfortable with single-function automation, I started building more complex systems. The SNS/SQS project implements a resilient CSV validation pipeline so that when an external API call fails, it publishes an SNS alert and queues a retry through SQS. The Glue/EMR project processes billing data at scale using PySpark on EMR clusters, with Glue Data Catalog handling the metadata layer.
+
+I wouldn't say I've mastered Lambda, I still need to reference documentation and search for solutions constantly. But what's different now is that I understand the underlying patterns well enough to know what I'm looking for. I can read the boto3 docs and figure out how to implement what I need instead of feeling lost.
+This work has been incredibly valuable in filling major gaps from my Security Specialty exam attempts. Both times I've taken it, there were questions about Lambda automation patterns, event driven architectures, and service orchestration that I just didn't have the knowledge for. My understanding was all superficial, but having gone deep into it now, I understand these concepts far better. Those questions would look completely different if I took the exam today.
+What I'm seeing clearly again is that memorizing boto3 syntax was never the right goal. The actual goal was understanding how these services work together, what the structure of event driven systems looks like, and how to build resilient architectures. The syntax is just the tool to implement those concepts, something that can be referenced from many places.
+
+All I have left now are three final projects: S3 Security Auditor, Security Group Auditor, and CloudTrail Log Analyzer. After those, I'll be wrapping up this boto3 module.
+
+---
+
 ## Current Projects
 
 | Project | Language/Tool | Status | Repository |
