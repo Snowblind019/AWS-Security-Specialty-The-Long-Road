@@ -156,14 +156,32 @@ All I have left now are three final projects: S3 Security Auditor, Security Grou
 
 ---
 
+## Update – January 21st, 2025
+
+I've completed the three final boto3 projects and moved them to a dedicated portfolio repo I named **[AWS Security Projects](https://github.com/Snowblind019/AWS-Security-Projects)**.
+
+The three projects are:
+
+**S3 Security Auditor** - Scans all S3 buckets for misconfigurations (public access, missing encryption, disabled versioning/logging) and sends SNS alerts grouped by severity
+
+**Security Group Auditor** - Scans EC2 security groups for overly permissive rules (0.0.0.0/0 access) and sends individual alerts for each finding
+
+**CloudTrail Log Analyzer** - Uses Athena SQL queries to analyze CloudTrail logs for suspicious activities (root usage, failed auth, IAM changes, etc.)
+
+These projects represent everything I've learned through this boto3 module, from basic S3 operations to more complex serverless architectures with Athena, Glue, and asynchronous query handling. Each project builds on the previous one, getting progressively more complex. The CloudTrail project was particularly challenging because I didn't know SQL when I started it. I learned SQL functions as I needed them, piecing together queries through trial and error in the Athena console. Now that it's finished, I'm going back to properly learn SQL fundamentals through SQLZoo to fill in those gaps and solidify my understanding.
+
+With boto3 wrapped up, I'm shifting focus to SQL fundamentals for the next 1-2 weeks, then moving on to AWS Skill Builder to fill in the theoretical knowledge gaps for the Security Specialty exam. The hands-on work gave me practical implementation skills, now it's time to round that out with the exam-specific content I'm missing.
+
+---
+
 ## Current Projects
 
 | Project | Language/Tool | Status | Repository |
 |---------|---------------|--------|------------|
-| Skill Development | Python, Boto3 | 🟪 In Progress | [View](./Skill%20Development) |
-| S3 Security Auditor | Python, Terraform | ✖️ Not Started | ✖️ Not Started |
-| Security Group Auditor | Python, Terraform | ✖️ Not Started | ✖️ Not Started |
-| CloudTrail Log Analyzer | Python, SQL | ✖️ Not Started | ✖️ Not Started |
+| Skill Development | Boto3 | ✔️ Complete | [View](./Skill%20Development) |
+| S3 Security Auditor | Boto3 | ✔️ Complete | [View](https://github.com/Snowblind019/AWS-Security-Projects/tree/main/S3%20Security%20Auditor) |
+| Security Group Auditor | Boto3 | ✔️ Complete | [View](https://github.com/Snowblind019/AWS-Security-Projects/tree/main/Security%20Group%20Auditor) |
+| CloudTrail Log Analyzer | Boto3, SQL | ✔️ Complete | [View](https://github.com/Snowblind019/AWS-Security-Projects/tree/main/CloudTrail%20Log%20Analyzer) |
 
 ## Study Progress
 
