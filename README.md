@@ -124,7 +124,7 @@ I had Claude generate scenarios around networking topics since those are what I 
 
 ---
 
-## Update – January 6th, 2025
+## Update – January 6th, 2026
 
 As of now I've completed three hands-on boto3 projects: an automated backup system, a security group auditor, and database-backed web infrastructure with EC2, RDS, and VPC.
 
@@ -140,7 +140,7 @@ I'm genuinely enjoying this journey now. This feels like progress on its own.
 
 ---
 
-## Update – January 15th, 2025
+## Update – January 15th, 2026
 
 Lambda has been a game-changer for how I think about automation in AWS. I started with the learning labs to understand how Lambda actually works and answer questions like: how do S3 events trigger functions? What does a CloudWatch schedule look like? How do you write IAM policies that give Lambda exactly what it needs? I built functions for EC2 backups, Aurora Serverless CSV imports, real-time S3 validation, and VPC resource cleanup—not because I needed those specific tools, but because they taught me the patterns that show up everywhere.
 
@@ -156,7 +156,7 @@ All I have left now are three final projects: S3 Security Auditor, Security Grou
 
 ---
 
-## Update – January 21st, 2025
+## Update – January 21st, 2026
 
 I've completed the three final boto3 projects and moved them to a dedicated portfolio repo I named **[AWS Security Projects](https://github.com/Snowblind019/AWS-Security-Projects)**.
 
@@ -171,6 +171,20 @@ The three projects are:
 These projects represent everything I've learned through this boto3 module, from basic S3 operations to more complex serverless architectures with Athena, Glue, and asynchronous query handling. Each project builds on the previous one, getting progressively more complex. The CloudTrail project was particularly challenging because I didn't know SQL when I started it. I learned SQL functions as I needed them, piecing together queries through trial and error in the Athena console. Now that it's finished, I'm going back to properly learn SQL fundamentals through SQLZoo to fill in those gaps and solidify my understanding.
 
 With boto3 wrapped up, I'm shifting focus to SQL fundamentals for the next 1-2 weeks, then moving on to AWS Skill Builder to fill in the theoretical knowledge gaps for the Security Specialty exam. The hands-on work gave me practical implementation skills, now it's time to round that out with the exam-specific content I'm missing.
+
+---
+
+## Update - February 1st, 2026
+
+So I have been a bit busy these past two weeks and didn't have as much time to put aside for studying SQL as I would have liked, but that's in the past and I have finished learning it. I can now read and understand SQL queries, write basic SELECT statements with WHERE clauses and JOINs, and actually know what I'm looking at when I see database schemas. Nothing fancy, but enough to work with CloudTrail logs and understand what's happening when I need to query data.
+
+Taking a moment to look back and reflect on my learning journey until now, I am truly happy with how I've matured and progressed toward getting this certification. I have come a long way. The bitterness I felt when I failed the first time, the devastation I felt the second time was hard, but I'm honestly grateful for those failures. From them, I learned how to rebound from failure and did deep dives on individual AWS services to actually understand them, delved into learning Python and boto3, picked up SQL, performed mini projects here and there in addition to the three main automation projects, among other things. I can finally see that checkered flag waving at the end of the runway.
+
+Shifting my mindset so I wasn't studying for an exam but for a job really worked wonders for me. Once I pass this exam, I'll be able to back my cert up with confidence that I know how to do the things required of me in a real job.
+
+Now, all I have left before retaking the exam is to use AWS Skill Builder for hands-on labs and practice exams. The labs will reinforce what I've already built with my automation projects, and the practice tests will highlight exactly where I need to focus. Anything I'm weak on, I'll cover with Udemy courses. I'm hoping to retake the exam by the end of February or beginning of March.
+
+With the Lord's help, I will pass this time!
 
 ---
 
