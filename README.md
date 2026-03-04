@@ -188,6 +188,24 @@ With the Lord's help, I will pass this time!
 
 ---
 
+## Attempt #3: March 3rd, 2026
+
+Yet another fail under my belt, and I am happy for it!
+
+For the past month, I have been going at studying quite hard. I have utilized AWS Skillbuilder, Tutorial Dojo, and Christophe Limpalair's Cybr.com course for studying and honestly it was pretty smooth. Come exam day, I didn't do as well as I thought I would do, to be honest. Surprisingly, this failure didn't make me get depressed as the previous failures have, because of this I am noticing something about myself that I didn't really realize until now, every failure just fuels my drive for perfection and mastery for this domain instead of wallowing in self pity. When I saw the score report, my mind instantly went to where I could have done better on the exam to have passed the exam and what I can do now to study and learn better.
+
+Something I noticed about my test today that makes me very happy is that I didn't guess my answers as I have the previous attempts. On the previous attempts, there were alot of questions I didn't know the answer to, so I would just guess the answer by what sounded most correct. I am happy that this time round, I didn't do any of that, but rather I confidentally selected each answer, and actually got a way better score compared to my previous two attempts! Asking Claude to give me a ball park estimate of how many questions I was away from getting a passing score, it estimated ~5 questions, which considering I started this whole thing with no AWS knowledge is amazing to hear! Also, it was my first attempt at taking this new C03 version of the exam, and I honestly like the new question format on the exam, they are actually fun. 
+
+Recalling my exam, I noticed my biggest weakness during the exam. The reality is that I know Lambda and Automation quite well from putting alot of time in projects, but I kinda neglected mastering hands on for every other service of the exam. Theory wise I am quite decent, but I don't have that low level knowledge that is more so required for the exam. I don't know if it's this new version of the exam or I just never noticed it because I guessed alot of the answers my previous attempts, but majority of the questions had 2 or 3 answer that were correct, where one was just more correct compared to the others in regards to what the question required. I struggled alot on this part throughout the exam, they all made sense, but stuff like "most cost efficient", "least overhead", "fastest response", "most secure" and others like them made choosing between the correct answers a bit hard. I am pretty proficient in the obvious stuff like Lambda is almost always never the answer in least overhead or if a service does something natively you don't need to reinvent the wheel like with CloudTrail Lake and Athena. Where I struggled was on the granular stuff that is only learned by working with the services. 
+
+Thus, I thought on it, on how I can learn all these granular things, and the Lord illuminated me on a solution. I will use the practice tests provided by Amazon on AWS Skill Builder, and on Tutorial Dojo, and even ask Claude to generate me questions with multiple choice questions. I will be taking each of the four answers to the question and going in AWS and building them out to see which one works and fails and thus find the correct answer by actually doing it. After this I plan to document why the wrong answer is wrong and the correct is correct in my own words and with screenshots from my hands on building of it and possibly even diagram the correct answer out via Lucidchart diagrams. This is all to give me that low level knowledge to choose the more correct answer between multiple correct answers. For this reason, I have created another repo named **[AWS The Hard Way](https://github.com/Snowblind019/AWS-The-Hard-Way)** in which I will be doing all this documentation.
+
+I feel like this route is not only helpful for the exam but actually working the job. My career goal is to become a Cloud Security Engineer, and my current skill level is good enough for a junior position, but delving this much deeper into AWS I am also working on becoming a excellent fully fledged engineer which you can't become through theory knowledge but through the ability to actually create and break things.
+
+I am excited to tackle this! Sadly, I can't put my full attention to it, as I am studying for the CCNA alongside this as I am required to obtain it at work currently. But even then, I will still make time to work on this and delve into the mud here and have a even stronger foothold on my 4th attempt so the 3-5 years of hands on experience AWS recommends for this exam don't apply to me! As Jesus said in Matthew 19:26 **“With men this is impossible, but with God all things are possible.”**
+
+---
+
 ## Current Projects
 
 | Project | Language/Tool | Status | Repository |
