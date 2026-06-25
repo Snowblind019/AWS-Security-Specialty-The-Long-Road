@@ -1,87 +1,21 @@
-# Amazon Macie — Custom Data Identifiers (CDIs)  
+# Macie Custom Data Identifiers
 
-## What Are CDIs in Macie
+Macie ships with managed data identifiers for common sensitive data (credit cards, SSNs, AWS secret keys, passport numbers). Custom data identifiers (CDIs) let you detect your organization's own formats that the managed set will not catch — employee IDs, contract numbers, internal tokens, project codenames. A CDI is regex plus optional context rules.
 
-By default, Amazon Macie comes preloaded with **managed data identifiers** — built-in detectors for common sensitive data types like:
+The point of a CDI is org-specific sensitive data. Managed identifiers cover the universal stuff; CDIs cover "sensitive in your world." The context rules (keyword proximity, ignore words) exist to cut false positives, and allow lists are the complementary feature for excluding known-benign matches.
 
-- Credit cards  
-- Names  
-- SSNs  
-- Passport numbers  
-- AWS secrets  
+## How it works
 
-But what if your organization uses **custom formats** that don’t fit those patterns?
+- A **CDI** combines: a **regex** pattern, optional **keywords** that must appear within a **maximum match distance** (proximity) of the match, **ignore words** that invalidate a match, and a **minimum match length**.
+- The keyword/proximity logic raises precision — e.g. only flag `SC-CONTRACT-[0-9]{6}` when "confidential" or "nda" is nearby.
+- **Allow lists** are a separate Macie feature: specific text or a regex of known-benign values to exclude from findings (e.g. a sample value that always appears).
+- CDIs run during **S3 sensitive data discovery jobs**; matches produce sensitive-data findings just like managed identifiers. Findings route to **Security Hub** and **EventBridge** for remediation.
 
-Think:
-
-- Internal Employee IDs (`EMP-445377`)  
-- Proprietary customer numbers (`ACCT-XYZ-00001`)  
-- Confidential project codes (`Project WinterFire`)  
-
-**Custom Data Identifiers (CDIs)** let you define your own rules and tell Macie exactly what to look for — based on:
-
-- Regex patterns  
-- Keyword proximity  
-- Validation logic  
-
----
-
-## Cybersecurity Analogy
-
-
-Think of CDIs like giving your **DLP engine a personalized dictionary of secrets**.
-
-Managed identifiers are the “known risks” (credit cards, SSNs, etc.),  
-but CDIs let you **weaponize your knowledge** of what’s sensitive in your world.
-
-
-Imagine you’re scanning internal documents and come across:
-
-```
-CONFIDENTIAL: Blueprint Code - SNOWY-ENG-1091
-```
-
-A built-in engine wouldn’t catch that.  
-But with a CDI that says:
-
-> Look for `SNOWY-ENG-[0-9]{4}` when near the word **"Blueprint"** or **"Confidential"**
-
-
-— Macie **flags it instantly**.
-
----
-
-## How Custom Data Identifiers Work
-
-A **CDI** is a combo of regex + keywords + optional checks:
-
-| **Component**          | **Description**                                                  |
-|------------------------|------------------------------------------------------------------|
-| **Regex pattern**      | The primary pattern you want to match (e.g. `SNOWY-[0-9]{6}`)    |
-| **Keywords (optional)**| Anchor words that must appear nearby to validate the match       |
-| **Proximity window**   | Distance (in characters) from the regex match to the keywords    |
-| **Ignore words**       | Words that invalidate a match (e.g. "example")                   |
-| **Minimum match length**| Optional length filter to reduce noise                         |
-
-Macie applies this logic when scanning S3 objects, and if all conditions match, it generates a **sensitive data finding** just like with any managed identifier.
-
----
-
-## Example — SnowyCorp CDI
-
-**SnowyCorp** uses internal Contract IDs formatted like: `SC-CONTRACT-987654`.
-
-They don’t want these appearing in:
-
-- Public S3 buckets  
-- External email dumps  
-- Customer-uploaded PDFs  
-
-Here’s how they build a CDI in Macie:
+Example CDI:
 
 ```json
 {
-  "name": "SnowyCorp Contract ID",
+  "name": "Contract ID",
   "regex": "SC-CONTRACT-[0-9]{6}",
   "keywords": ["confidential", "contract", "nda"],
   "maximumMatchDistance": 50,
@@ -89,79 +23,25 @@ Here’s how they build a CDI in Macie:
 }
 ```
 
-Now, Macie will **only flag this pattern when near sensitive context** — preventing noise and improving true positive rates.
+## Managed identifiers vs CDIs vs allow lists
 
----
+| | Purpose |
+|---|---|
+| Managed data identifiers | Built-in detectors for common sensitive data |
+| Custom data identifiers | Your own regex + context rules for org-specific formats |
+| Allow lists | Exclude known-benign values from findings |
 
-## What You Can Do With CDIs
+## What gets tested
 
-| **Use Case**          | **Example**                                           |
-|------------------------|-------------------------------------------------------|
-| Internal IDs           | Employee IDs, badge numbers, customer IDs            |
-| Project codenames      | Proprietary naming patterns like `BLIZZARD-R6-ALPHA` |
-| Token formats          | Custom JWTs, auth tokens (`X-Access-Token: abc-123`) |
-| Legal strings          | `"Privileged & Confidential - Case #XYZ123"`         |
-| Regex-tuned formats    | Anything that follows a predictable structure         |
+- CDIs detect organization-specific sensitive-data formats (employee/contract IDs, internal tokens) that managed identifiers miss, using regex plus keyword proximity.
+- Keyword proximity (maximum match distance) and ignore words are the knobs for cutting false positives; allow lists exclude known-benign values.
+- Macie, and therefore CDIs, is S3-only — not CloudTrail, EBS, RDS, or DynamoDB.
+- Findings route to Security Hub and EventBridge to drive remediation (block public access, quarantine, notify).
+- CDIs add no extra cost themselves; Macie bills on bytes scanned, so scope discovery jobs to high-risk buckets.
 
-CDIs become especially useful for **regulated environments** (HIPAA, GDPR, CJIS, etc.) where “sensitive” is *context-specific*, not always standard.
+## Limitations
 
----
-
-## Where CDIs Are Used
-
-- **S3 Sensitive Data Discovery** — Macie uses CDIs when scanning S3 buckets  
-- **Findings** appear in **Security Hub**, **EventBridge**, or **CloudWatch Logs**  
-- **Can trigger remediation** — block public access, quarantine bucket, notify teams  
-
-> They do **not** work on CloudTrail logs, EBS, RDS, or DynamoDB — **Macie is S3-only**.
-
----
-
-## Security Benefits of CDIs
-
-| **Benefit**               | **Description**                                              |
-|---------------------------|--------------------------------------------------------------|
-
-| **Tailored DLP**          | Build rules around your proprietary secrets                  |
-| **Reduced false positives**| Add context keywords and distance logic                     |
-
-| **Compliance automation** | Prove that your sensitive data is being monitored            |
-| **Integration**           | Use EventBridge to trigger alerts or remediations            |
-| **Visibility**            | Audit how often and where sensitive data shows up in buckets |
-
----
-
-## SnowyCorp Workflow Example
-
-1. **Devs upload log archives** to S3  
-2. **Macie CDI** detects `SNOWY-TOKEN-[A-Z0-9]{12}` in a zipped file  
-3. **Finding sent** to Security Hub  
-4. **EventBridge triggers** Lambda that:
-    - Removes public access  
-    - Tags the object  
-    - Notifies `SnowySecOps` Slack channel  
-
-The devs are alerted, and **no secrets leave the org**.
-
----
-
-## Pricing Note
-
-Custom Data Identifiers do **not add extra cost** by themselves.  
-However, **Macie pricing is based on bytes scanned**, so:
-
-- A **wider scan scope = more cost**  
-- Use **scoped buckets** and **discovery jobs with filters** to limit cost while targeting high-risk areas
-
----
-
-## Final Thoughts
-
-**Custom Data Identifiers unlock the real power of Macie.**
-
-It’s not just about “credit cards” and “SSNs” —  
-It’s about protecting *your* secrets, in *your* format, across your data lake.
-
-Without CDIs, Macie is **generic**.  
-With CDIs, Macie becomes **SnowyCorp’s custom-tailored surveillance system**, constantly sweeping S3 for confidential data leaks that *only you understand*.
-
+- S3-only; no other data stores.
+- Regex-based — unstructured or obfuscated secrets can evade.
+- Detection, not prevention; pair with EventBridge/remediation.
+- Cost scales with the volume of data scanned.

@@ -17,7 +17,7 @@ WHERE eventName = 'DeleteBucket'
   AND eventTime > timestamp '2025-01-01 00:00:00'
 ```
 
-- Retention is configurable up to 7 years (a longer-retention tier extends further). Data is immutable once written.
+- Retention is configurable up to 7 years (2,557 days) on the standard pricing option, or up to ~10 years (3,653 days) on the extendable-retention option. Data is immutable once written.
 - An EDS can be federated to Athena when you need to join Lake data against other tables.
 
 ## CloudTrail vs CloudTrail Lake
@@ -26,7 +26,7 @@ WHERE eventName = 'DeleteBucket'
 |---|---|---|
 | Storage | Your S3 bucket | Managed event data store |
 | Querying | Set up Athena/ETL yourself | Native SQL, no setup |
-| Retention | You manage via S3 lifecycle | Up to 7 years, built in |
+| Retention | You manage via S3 lifecycle | Up to 7 years built in (10 with extendable option) |
 | Mutability | Depends on your bucket controls | Immutable by design |
 | Sources | AWS API events | AWS events + Config items + custom events |
 

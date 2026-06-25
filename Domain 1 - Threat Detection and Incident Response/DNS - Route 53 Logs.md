@@ -1,143 +1,37 @@
-# AWS Route 53 Resolver Logs — Deep Dive (DNS Logging in AWS)
+# Route 53 Resolver Query Logging
 
-## What Is the Service (and Why It’s Important)
+Opt-in logging of the DNS queries that resources in your VPC make through the Route 53 Resolver (the VPC's built-in DNS at 169.254.169.253 / VPC+2). It records the domain names your workloads resolve — the question, not the full answer. Destinations: CloudWatch Logs, S3, or Kinesis Data Firehose.
 
-When an application or service in your **VPC** wants to resolve a domain name (like `api.vendor.com`), it uses DNS resolution. In AWS, this is typically handled by the **Amazon Route 53 Resolver**, AWS’s built-in DNS server (accessible at `169.254.169.253` in every VPC).
+Where it gets confused: DNS query logging is the detection side of Route 53 Resolver; Route 53 Resolver DNS Firewall is the prevention side (block/allow by domain list). Query logging shows you the domains being resolved, which VPC Flow Logs (IPs and ports only) and CloudTrail (API calls only) cannot, making it the signal for C2 beaconing, DNS exfiltration, and lookups to malicious or newly registered domains.
 
-**Route 53 Resolver Query Logging** is an *opt-in* feature that records:
-- Who is making DNS queries
-- What domains are being requested
-- Where those queries are going
+## How it works
 
-This information is critical for:
+- Enable a **resolver query log configuration** and associate it with one or more **VPCs**. Off by default.
+- Destinations: **CloudWatch Logs** (alerting/dashboards), **S3** (archive plus Athena threat hunting), or **Firehose** (stream to a SIEM).
+- Each record includes `queryName`, `queryType` (A/AAAA/MX...), `rcode` (NOERROR/NXDOMAIN...), the source instance/IP, and the VPC. It captures the query and response code, not the full resolved answer or payload.
+- This is distinct from **public hosted zone query logging**, which logs queries hitting your authoritative public zones (to CloudWatch Logs). The Resolver version is the one for VPC egress visibility.
 
-- **Security visibility**: Spot malware beacons, C2 domains, data exfiltration, or typo-squatting attempts.
-- **Threat hunting**: Search for newly discovered malicious domains.
-- **Troubleshooting**: Debug DNS failures and resolution path issues.
-- **Compliance**: Prove DNS activity is monitored for integrity and egress control.
+## Resolver query logging vs neighbors
 
----
+| Source | Shows |
+|---|---|
+| Resolver query logging | Domain names resolved from the VPC (detect) |
+| Route 53 Resolver DNS Firewall | Blocks/allows resolution by domain list (prevent) |
+| VPC Flow Logs | IP/port/protocol flows; no domain names |
+| CloudTrail | API calls; not DNS resolution |
 
-## Cybersecurity Analogy
+## What gets tested
 
-DNS logging is like monitoring *who’s asking questions* in your office.  
-You don’t know the full answer or the outcome — but you *do* know:
+- Resolver query logging is how you see the domain names workloads resolve — the answer for detecting C2/beaconing and DNS exfiltration that Flow Logs (IPs only) and CloudTrail (APIs only) miss. "Which log shows the domain queried" is this.
+- Per-VPC, opt-in; destinations are CloudWatch Logs, S3, or Firehose.
+- Query logging detects; DNS Firewall blocks. If the scenario wants to stop resolution of bad domains, that is DNS Firewall, not query logging.
+- DNS exfiltration appears as long or encoded subdomains and high query volume in `queryName`.
+- Workloads that use a custom or external DNS resolver bypass Route 53 Resolver and will not be logged.
+- Pair the S3 destination with Athena for retroactive IOC hunting.
 
-- **Who** asked the question  
-- **What** they asked  
-- **When** they asked it  
-- **Where** the answer came from  
+## Limitations
 
-Example:  
-If your developer’s laptop starts asking:
-
-- `kittens.botnet.ru`
-- `exfil.maliciousdomain.xyz`
-
-That’s *not* normal. Even if the malware encrypts its payload, it still needs to resolve domain names. DNS becomes the last weak link — and if you’re logging it, you *catch the signal*.
-
-## Real-World Analogy
-
-Think of DNS logs like the **phone directory request logs** at an office helpdesk:
-
-> Every time someone asks, “What’s the number for Alice in accounting?”, the request is logged.
-
-You might not know what was said during the call — but if someone asks for Alice’s number 12 times at **2 AM**, something’s off. Same logic applies to cloud workloads.
-
-Questions DNS logs help answer:
-
-- Why is an EC2 querying a domain **500 times an hour**?
-- Why is a **Lambda** resolving domains it shouldn't?
-- Who resolved a **phishing domain** that just popped up?
-
----
-
-## How It Works / What It Logs
-
-You can enable **Route 53 Resolver Query Logging** per VPC and export logs to:
-
-- **Amazon CloudWatch Logs** – for alerts, dashboards, and real-time analysis
-- **Amazon S3** – for long-term archival and Athena-based threat hunting
-- **Kinesis Data Firehose** – for streaming into SIEMs
-
-Each log record includes the following fields:
-
-| **Field**            | **Meaning**                                               |
-|----------------------|-----------------------------------------------------------|
-| `queryTimestamp`     | When the DNS request was made                             |
-| `srcIP`              | Source IP (typically ENI address from the instance)       |
-| `srcPort`            | Source port of the DNS request                            |
-| `queryName`          | Domain being resolved (e.g., `api.example.com`)           |
-| `queryType`          | Type of DNS record (A, AAAA, MX, etc.)                    |
-| `queryClass`         | DNS class (typically `IN`)                                |
-| `rcode`              | DNS response code (e.g., `NOERROR`, `NXDOMAIN`)          |
-| `resolverEndpointID`| If custom endpoints used, shows which one handled query   |
-| `vpcID`              | The VPC where the query originated                        |
-
----
-
-## Security Use Cases
-
-| **Use Case**                | **What DNS Logs Help You Detect**                                               |
-|-----------------------------|----------------------------------------------------------------------------------|
-| **Beaconing / Malware C2**  | Frequent or periodic queries to weird domains (e.g., `.xyz`, `.ru`, low TTLs)   |
-| **DNS Data Exfiltration**   | DNS queries with embedded data in subdomains                                   |
-| **Phishing Kit Install**    | Resolution of staging domains like `clone-paypal-login.shop`                   |
-| **Command and Control Infra** | Lookups to **newly registered domains** or suspicious DGA patterns           |
-| **Suspicious Developer Tools** | Connections to `ngrok`, `burp`, `requestbin` domains                         |
-| **Malicious Lambda Calls**  | If a Lambda resolves domains, it may be making unapproved external calls       |
-
----
-
-## Example Log Entry
-
-```json
-{
-  "queryTimestamp": "2025-09-22T04:33:21Z",
-  "srcIP": "10.0.42.103",
-  "queryName": "auth-check-update.spotify.updates.fake.ru",
-  "queryType": "A",
-  "queryClass": "IN",
-  "rcode": "NOERROR",
-  "vpcID": "vpc-0abc123456789def0"
-}
-```
-
-### The Security Team:
-
-- Used **Athena** to query S3 DNS logs for that FQDN
-- Found **4 DNS queries** from a dev EC2 over the past 7 days
-- Cross-referenced with **VPC Flow Logs** — confirmed outbound HTTPS immediately after resolution
-
-### What They Uncovered:
-
-- The EC2 instance had a **misconfigured GitHub token**
-- A malicious actor uploaded a poisoned `install.sh` script
-- The script resolved the phishing domain and executed a payload
-
-**Without DNS Logs?**  
-This would’ve gone undetected. The domain was short-lived, never hit antivirus signatures, and didn’t trigger API-level CloudTrail alerts.
-
----
-
-## Final Thoughts
-
-DNS logs are **criminally underrated** in cloud security.
-
-They don’t show full payloads.  
-They don’t show who clicked what.  
-But they do show **intent**.
-
-They’re the first breadcrumb in many attacks — and the last unencrypted hint that something's going wrong.
-
-### Route 53 Resolver Logs help you:
-
-- See what domains your workloads are curious about  
-- Catch **weird behavior early**  
-- Investigate stealthy malware or exfil attempts  
-- Hunt IOCs retroactively with **confidence**
-
-> In a world of encrypted payloads, backdoors, poisoned scripts, and fleeting infrastructure —
-> **DNS remains your clearest signal.**
-
-**If you’re serious about threat detection in AWS — start with DNS.**
+- Logs the query and response code, not the full answer or payload — intent, not content.
+- Only captures queries that go through the Route 53 Resolver; external resolvers bypass it.
+- Opt-in and off by default.
+- The destination (CloudWatch/S3/Firehose) carries its own cost.
