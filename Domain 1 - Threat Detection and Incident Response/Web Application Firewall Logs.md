@@ -1,148 +1,42 @@
 # AWS WAF Logs
 
----
+Per-request logging of how a **web ACL** evaluated traffic: the request metadata, every rule group that was evaluated, which rule made the final call, and the terminating action (**ALLOW, BLOCK, COUNT, CAPTCHA, or CHALLENGE**). Each record is a **JSON document**, logging is off by default, and you configure it per web ACL. In the exam it is the **Layer 7** web-request audit trail used for rule tuning, forensics, and proving web-layer protection, and it is deliberately distinct from network-layer VPC Flow Logs.
 
-## What Is The Service
+The one-line role: WAF Logs are one JSON record per request showing the terminating rule and action plus all rule groups evaluated. Its lane is application-layer request logging, not L3/4 flow metadata (VPC Flow Logs) and not the lightweight sampled-requests view. The tested gotcha is the destination: CloudWatch Logs, S3, or Firehose, and whichever you choose, the destination name must start with **`aws-waf-logs-`**.
 
-**AWS WAF Logs** provide detailed, per-request visibility into how AWS Web Application Firewall evaluates, accepts, or blocks web traffic. While AWS WAF is the shield protecting your apps from malicious requests (e.g., SQL injection, XSS, bots, etc.), its **logs are the black box recorder** — capturing *every single request* processed, along with rule evaluations and final decisions.
+## How it works
 
-WAF Logs are not enabled by default — but once turned on, they give your security team **line-by-line details on what WAF is doing**, including which rule group triggered, what part of the request was suspicious, and how the action was taken (allow, block, count).
+- **Enablement**: a logging configuration on the web ACL. **Three destinations** are supported: **CloudWatch Logs**, **Amazon S3**, and **Amazon Data Firehose** (formerly Kinesis Data Firehose). You pick **one per configuration**, and fan out to more via Firehose. (The old "WAF can only log through Firehose" limitation is gone.)
+- **Naming and placement**: the destination name must start with **`aws-waf-logs-`** for all three destination types (log group, bucket, or stream), and it must be in the **same account and Region** as the web ACL. For a **CloudFront (global) web ACL, logging must be in us-east-1**.
+- **Record content**: JSON per request with `timestamp`, `action`, `terminatingRuleId` and `terminatingRuleType`, `httpRequest` (`clientIp`, `country`, `uri`, `method`, `headers`, `args`), `ruleGroupList` (all evaluated), `nonTerminatingMatchingRules` (matched but not decisive, as in COUNT), `rateBasedRuleList`, `labels`, CAPTCHA/CHALLENGE response, and `responseCodeSent`.
+- **Redacted fields**: strip sensitive parts of the request (for example the `Authorization` or `Cookie` header, a query arg, or the body) from the logs. Redaction does **not** affect request sampling or Security Lake collection.
+- **Log filtering**: WAF can log **only requests that meet conditions** (for example only BLOCK actions, or only requests carrying a given label) to control volume. This is native to WAF logging, not just a downstream Kinesis trick.
+- **S3 delivery**: files land at roughly 5-minute intervals, compressed, under `AWSLogs/account-id/WAFLogs/Region/web-acl-name/YYYY/MM/dd/HH/mm`.
+- **Related but separate**: `GetSampledRequests` gives a lightweight sample of up to 500 requests from the last 3 hours with no logging configuration, useful for a quick look but not a complete record. WAF logs can also be a native **Security Lake** source.
 
-This is essential for:
+## Destination comparison
 
-- **Threat hunting and forensics**  
-- **False positive/negative tuning**  
-- **Security analytics and dashboards**  
-- **SIEM correlation**  
-- **Proving compliance with NIST, PCI, ISO, HIPAA**
+| Destination | Best for | Analysis tooling | Notes |
+|---|---|---|---|
+| CloudWatch Logs | Quick setup, near-term analysis, alarms | Logs Insights, metric filters | Simplest; higher cost at volume |
+| S3 | Long-term storage, compliance, bulk analysis | Athena | Cheapest at volume; ~5-min batched, compressed |
+| Amazon Data Firehose | Streaming to OpenSearch, Redshift, or a SIEM | Downstream tool | Most flexible; can transform in transit |
 
----
+## What gets tested
 
-## Cybersecurity and Real-World Analogy
+- WAF Logs are the Layer 7 per-request record showing the terminating rule and action and every rule group evaluated. It is the web-application-firewall audit trail, distinct from VPC Flow Logs (Layer 3/4 network metadata) and from packet capture.
+- The destinations are CloudWatch Logs, S3, or Firehose, one per configuration. The `aws-waf-logs-` prefix requirement is a classic trap: name the destination without it and WAF will not accept or list it.
+- A CloudFront (global scope) web ACL must log in us-east-1. Regional web ACLs log in their own Region.
+- `RedactedFields` removes sensitive data (Authorization, Cookie, body) from the logs, and it does not change request sampling or Security Lake collection.
+- Log filtering lets you log only BLOCK or only label-matched requests to cut volume. It is a WAF-native capability, not only a Kinesis-side filter.
+- Action values include ALLOW, BLOCK, COUNT, CAPTCHA, and CHALLENGE. COUNT mode records matches without blocking, which is the safe way to validate a rule (or an exclusion) before enforcing it.
+- Analysis maps to the destination: Athena over S3, Logs Insights over CloudWatch, Firehose out to OpenSearch or a SIEM.
+- Do not confuse full logging with `GetSampledRequests`, which is a 3-hour sample requiring no configuration.
 
-### **Cybersecurity Analogy**  
-Imagine AWS WAF is your security guard at the front door of a data center. He checks ID, scans for suspicious bags, looks for banned patterns, and allows or denies entry.  
-Now imagine he **writes down every person he evaluated**, what rules they tripped (or didn’t), what part of the bag looked shady, and what decision he made — in a ledger.
+## Limitations
 
-That’s WAF logging. It’s the *audit trail* of security enforcement at the HTTP request level.
-
-### **Real-World Analogy**  
-Think of a bouncer at a club who doesn't just say “yes” or “no” — he logs:
-- What time each person came
-- What they were wearing
-- What they said at the door
-- Whether they were flagged as underage or drunk
-- Which security rule (dress code, ID mismatch) was triggered
-
-**Now multiply that by millions of requests per hour.**
-
----
-
-## Where the Logs Go
-
-AWS WAF doesn’t write to CloudWatch Logs directly. Instead, **logs are streamed to**:
-
-- **Amazon Kinesis Data Firehose**, which can deliver logs to:
-  - **Amazon S3** — long-term storage, batch analysis  
-  - **Amazon Redshift** — for structured querying  
-  - **Amazon OpenSearch** — for real-time dashboards  
-  - **3rd-party SIEMs** — like Splunk, Datadog, Sentinel  
-
-You configure a **Logging Configuration** per WebACL, and Firehose handles the delivery.
-
----
-
-## What’s in a WAF Log Entry?
-
-Each log record is a **JSON document** with full metadata about the request. Key fields:
-
-- `timestamp`: When the request hit  
-- `httpRequest`:
-  - `clientIp`
-  - `country`
-  - `uri`, `method`, `headers`, `args`, `body`
-- `action`: `ALLOW` | `BLOCK` | `COUNT`
-- `terminatingRuleId`: Which rule caused the final decision
-- `terminatingRuleType`: `ManagedRuleGroup` | `RateBasedRule` | etc.
-- `ruleGroupList[]`: All rule groups evaluated (and which rules matched)
-- `labels[]`: Tags applied to this request (e.g., `bot:known`)
-- `captchaResponse`: If CAPTCHA was used
-- `responseCodeSent`: Final HTTP status
-- `nonTerminatingMatchingRules[]`: Rules that matched but didn't affect the final decision (e.g., COUNT mode)
-
----
-
-## Key Use Cases
-
-| Use Case                      | WAF Logs Help You...                                     |
-|-------------------------------|-----------------------------------------------------------|
-| **Tune rules**                | Identify false positives/negatives, add exclusions        |
-| **Investigate attacks**       | Review exact payloads of XSS/SQLi probes                  |
-| **Rate abuse detection**      | See spike patterns by IP, user-agent, path                |
-| **User behavior modeling**    | Track which endpoints are hit, by whom, from where        |
-| **WAF + GuardDuty correlation**| Enrich threat intel pipelines                            |
-| **PCI/NIST compliance**       | Prove web-layer protections were in place and effective   |
-
----
-
-## Logging + Analytics Best Practices
-
-- Use **OpenSearch** with dashboards for live analysis  
-- Set **filters in Kinesis** to log only BLOCK or COUNT actions if you want to reduce volume  
-- Pair with **Athena** for querying logs in S3 (cheap + serverless)  
-- **Redact sensitive fields** (like POST body passwords) using `RedactedFields`  
-- Tag requests with **labels** and correlate with other AWS services (e.g., CloudTrail, GuardDuty)
-
----
-
-## Pricing Model
-
-Logging itself is free — but you pay for:
-
-| Component         | Cost Basis                         |
-|-------------------|-------------------------------------|
-| Kinesis Firehose  | Per GB ingested and delivered       |
-| S3 Storage        | Per GB-month                        |
-| OpenSearch/Redshift | Standard pricing                  |
-| Athena            | Per TB scanned per query            |
-
-> 💡 High-traffic APIs with full-body logging can generate **massive logs**, so control scope carefully.
-
----
-
-## Real-Life Example
-
-Let’s say **Snowy’s team** just deployed a new API protected by WAF. After going live, some users report 403 errors when uploading photos. Snowy turns on WAF logging to investigate.
-The logs show:
-- The requests were `POST`s with large bodies  
-- A managed rule group for SQL injection was blocking them  
-
-- The triggering payload included strings like `filename="select.jpg"` which falsely matched SQLi patterns  
-
-Using this insight, Snowy:
-- Creates an **exclusion** for that rule when the path starts with `/upload`  
-- Verifies the fix using logs in **COUNT** mode  
-
-- Later builds a **Grafana dashboard** showing top IPs triggering blocks, top rule groups matched, and total actions per minute  
-
-Now the team can *monitor* WAF behavior, *tune it*, and *prove* it’s doing its job.
-
----
-
-
-## Final Thoughts
-
-WAF Logs are your **deep inspection microscope** for web-layer traffic.  
-They’re not just logs — they’re **evidence**, **debug tools**, and **threat intelligence feeds** rolled into one.
-
-Without them, WAF is a black box.  
-With them, you gain:
-
-- Insight into attack attempts  
-- Clarity on why users are blocked  
-- Feedback loop for rule tuning  
-- A SIEM-friendly data source  
-- Proof of protection for auditors  
-
-If you’re using WAF, **logs should always be part of the plan** — they close the loop between detection and action.
-
+- Off by default, one destination per configuration, and the `aws-waf-logs-` naming prefix is mandatory.
+- Layer 7 only. It does not cover network-layer traffic (that is VPC Flow Logs) and never captures raw packets.
+- High-traffic web ACLs with full request logging generate large volumes and cost. Use log filtering and redaction to keep it in check.
+- Delivery is not instantaneous. S3 batches at roughly 5-minute intervals.
+- It records enforcement, it does not enforce. Tuning still requires you to act on what the logs reveal, with rule exclusions and COUNT-mode testing.

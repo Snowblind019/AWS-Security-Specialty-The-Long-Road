@@ -1,179 +1,44 @@
 # VPC Flow Logs
 
-## What Is The Service
+A feature that captures **Layer 3/4 metadata** about IP traffic going to and from network interfaces in your VPC: the 5-tuple (source and destination IP and port, protocol), packet and byte counts, a time window, and an **ACCEPT or REJECT** action. It records metadata, not packet contents. You enable it at the **VPC**, **subnet**, or **ENI** level and publish to **CloudWatch Logs**, **S3**, or **Kinesis Data Firehose**. In the exam it is the network-visibility and network-forensics answer, the record of who connected to whom over what port and whether it was allowed, and the tool for telling a security group problem apart from a NACL problem.
 
-VPC Flow Logs is an AWS feature that allows you to capture IP-level network traffic going into and out of network interfaces within your Virtual Private Cloud (VPC). These logs record metadata about the traffic — not the full packet contents, but details like source and destination IP, ports, protocol, traffic direction, and accept/deny status.  
-You can enable Flow Logs at different levels:
+The mental model is metadata not packets, batched not real time. Flow logs answer "who talked to whom, on which port, allowed or denied," but never "what did they say." Deep packet inspection is VPC Traffic Mirroring, not this. And the single detail that trips people is `srcaddr` versus `pkt-srcaddr` once traffic passes through a NAT gateway, load balancer, or transit gateway.
 
-- VPC-level (entire virtual network)  
-- Subnet-level (specific segments)  
-- Elastic Network Interface (ENI)-level (specific EC2, Lambda, Load Balancer, etc.)
+## How it works
 
-Once captured, the logs can be published to:
+- **Levels**: VPC, subnet, or ENI. A subnet or VPC flow log covers every network interface inside it.
+- **Traffic type filter**: capture **ACCEPT**, **REJECT**, or **ALL**.
+- **Destinations**: **CloudWatch Logs** for Logs Insights queries and alarms, **S3** for cheap archival and Athena, **Kinesis Data Firehose** for streaming to a SIEM or OpenSearch. (Firehose is the third destination the older notes often omit.)
+- **Timing**: the maximum aggregation interval is **10 minutes or 1 minute**, plus an additional publish delay, so it is **not real time**. On **Nitro-based instances the interval is always 1 minute or less** regardless of what you set.
+- **Fields**: the default format gives version, account, interface-id, the 5-tuple, packets, bytes, start/end, action, and log-status. A **custom format** adds the fields that matter for investigation: `vpc-id`, `subnet-id`, `instance-id`, `tcp-flags`, `type`, `flow-direction`, `traffic-path`, `pkt-src-aws-service`/`pkt-dst-aws-service`, and crucially **`pkt-srcaddr`/`pkt-dstaddr`**.
+- **`srcaddr` vs `pkt-srcaddr`**: `srcaddr`/`dstaddr` show the **immediate interface** address (the load balancer, the NAT gateway, or the ENI's primary private IP), while `pkt-srcaddr`/`pkt-dstaddr` show the **original packet** endpoints. To trace true source and destination through an intermediary, you must add the `pkt-*` fields.
+- **Traffic that is NOT captured**: Amazon DNS server queries (traffic to your **own** DNS server is logged), Windows license activation, instance metadata at **169.254.169.254**, Amazon Time Sync at **169.254.169.123**, DHCP traffic, the reserved IP of the default VPC router, mirrored source traffic (you see the mirror target only), and traffic between an endpoint ENI and a Network Load Balancer ENI.
+- **Immutability and scope**: after creation you **cannot change** a flow log's configuration or record format, you delete and recreate it. You cannot log a peered VPC unless the peer is in your account. `log-status` reports OK, NODATA, or SKIPDATA.
 
-- Amazon CloudWatch Logs (for real-time analysis, dashboards, alerts)  
-- Amazon S3 (for long-term storage, bulk analysis, compliance)
+## Destination comparison
 
-These logs are critical for:
+| Destination | Best for | Analysis tooling | Relative cost |
+|---|---|---|---|
+| CloudWatch Logs | Near-term monitoring, alarms | Logs Insights, metric filters, alarms | Higher per GB |
+| S3 | Archival, bulk and forensic analysis | Athena (Parquet for cheap scans) | Lowest |
+| Kinesis Data Firehose | Streaming out to a SIEM or OpenSearch | Downstream partner or AWS analytics | Delivery plus downstream |
 
-- **Network visibility**: You can see how traffic moves within your environment.  
-- **Troubleshooting**: Diagnose “why can’t X reach Y?” types of issues.  
-- **Security**: Detect unexpected communication (e.g., EC2 beaconing to known C2 servers, exfiltration, port scanning, etc.)
+## What gets tested
 
-It's not deep packet inspection — but it's like having a syslog for your network layer.
+- Flow Logs capture network metadata (the 5-tuple plus ACCEPT/REJECT) at an interface, not packet contents. If a question needs actual payloads or packet capture, that is VPC Traffic Mirroring, not flow logs.
+- Levels are VPC, subnet, and ENI, and a broader log covers every ENI inside.
+- `srcaddr`/`dstaddr` show the immediate interface, `pkt-srcaddr`/`pkt-dstaddr` show the original endpoints. To find the true source or destination behind a NAT gateway, load balancer, or transit gateway you need the `pkt-*` fields from a custom format. This is a heavily tested distinction.
+- Not real time. The aggregation interval (10 or 1 minute) plus a publish delay rules flow logs out whenever a scenario demands real-time telemetry. Nitro instances always aggregate at 1 minute or less.
+- The not-captured list is a favorite trap. If a question asks why DNS, instance-metadata, Time Sync, or DHCP traffic is missing, this list is the answer. Traffic to a custom DNS server, by contrast, is logged.
+- Diagnosing security group versus NACL: because security groups are stateful and NACLs are stateless, the ACCEPT/REJECT pattern distinguishes them. An allowed inbound flow with a blocked return points at a NACL missing the ephemeral-port rule, not the security group.
+- Destinations map to needs: CloudWatch Logs for alarms and Logs Insights, S3 for Athena and cheap retention, Firehose for streaming to a SIEM.
+- Configuration is immutable, so changing fields means deleting and recreating the flow log.
 
----
+## Limitations
 
-## Cybersecurity Analogy
-
-Imagine you're the head of security for a large corporate office with hundreds of doors and hallways. You can’t listen to every conversation or read every letter (that would be packet inspection), but you can install motion sensors and badge scanners on every entrance and exit.  
-These sensors log:
-
-- Who entered  
-- What door they used  
-- When they came in or out  
-- Whether the door was locked or unlocked  
-
-That’s what VPC Flow Logs does. It doesn’t record the contents of the communication, but it records:
-
-- Source/destination IPs (who talked to who)  
-- Ports and protocols (what kind of conversation it was)  
-- Timestamps (when it happened)  
-- Whether it was allowed or blocked  
-
-This allows your security team to reconstruct movement, detect anomalies, and investigate suspicious behavior — even if they never saw the actual conversation.
-
-## Real-World Analogy
-
-Think of VPC Flow Logs like your cell phone call log. It doesn’t record the conversation itself, but it shows:
-
-- Who you called  
-- When the call started and ended  
-- How long it lasted  
-- Whether the call connected or failed  
-
-If your phone bill showed a bunch of late-night calls to unknown international numbers, you'd know something was off — even without hearing what was said. That’s how Flow Logs help you detect weird traffic like port scans, unusual egress, or traffic to blacklisted IPs.
-
----
-
-## How it Works / What It Captures
-
-Here’s a sample log entry format (default format):
-
-```text
-version account-id interface-id srcaddr dstaddr srcport dstport protocol packets bytes start end action log-status
-```
-
-Example:
-```text
-2 123456789010 eni-abc123 10.0.0.1 10.0.0.2 443 49152 6 10 840 1620225600 1620225660 ACCEPT OK
-```
-
-**Explanation:**
-
-| Field         | Meaning                                       |
-|---------------|-----------------------------------------------|
-| srcaddr       | Source IP address                             |
-| dstaddr       | Destination IP address                        |
-| srcport       | Source port                                   |
-| dstport       | Destination port                              |
-| protocol      | Protocol number (e.g., 6 = TCP)               |
-| action        | ACCEPT or REJECT                              |
-| log-status    | OK, NODATA, SKIPDATA                          |
-| interface-id  | The ENI through which traffic flowed          |
-| start / end   | Time window for the log entry                 |
-
-You can also use custom log formats to select the fields you care about — like instance IDs, subnet IDs, or TCP flags.
-
----
-
-## Security Use Cases
-
-| Use Case              | Description                                                             |
-|-----------------------|-------------------------------------------------------------------------|
-| Detect exfiltration   | Watch for large outbound traffic to external IPs or strange ports       |
-| Spot lateral movement | Unexpected communication between unrelated subnets or EC2s              |
-| Catch port scanning   | Burst of failed inbound connections from a single source IP             |
-| IAM abuse             | EC2 communicating with unauthorized services or APIs                    |
-| Geo-restrictions bypass | Outbound traffic to IPs in restricted countries or untrusted locations |
-| Zero-day response     | Retrospective analysis after an IOCs list is released                   |
-
----
-
-## Limitations of VPC Flow Logs
-
-- **Not real-time**: Data is batched in intervals (~10 minutes delay to appear in CloudWatch/S3).  
-- **No packet contents**: You cannot inspect actual payloads, headers, DNS, etc.  
-- **Some traffic may be excluded**:
-  - Traffic to/from Amazon DNS (if using default settings)  
-  - VPC endpoints  
-  - EC2 metadata (`169.254.169.254`)  
-
----
-
-## Best Practices
-
-- Enable VPC Flow Logs on **ALL** VPCs — production and dev/test.  
-- Use **centralized logging architecture**: Send to a dedicated log account or SIEM.  
-- Use **filters to monitor anomalies**: Detect outbound traffic spikes or failed connection attempts.  
-- **Combine with GuardDuty or Athena**: Flow logs become actionable when joined with threat intel feeds.  
-- Use **lifecycle policies**: Store logs in S3, then transition to Glacier to save cost while preserving forensic value.  
-- **Tag ENIs**: Helps associate logs with app or environment.
-
----
-
-## Pricing Model
-
-Pricing depends on:
-
-- Data volume captured (per GB)  
-- Whether you're delivering to CloudWatch Logs or S3  
-- Custom fields used (more fields = larger logs)
-
-| Destination       | Pricing Notes                                          |
-|-------------------|--------------------------------------------------------|
-| **S3**            | Lower cost, better for archival or batch analytics     |
-| **CloudWatch Logs** | Higher cost, better for real-time dashboards and alerts |
-
-You pay for:
-
-- Data ingestion  
-- Optional metrics or alerts (CloudWatch charges)
-
----
-
-## Real-Life Example
-
-A team at **Winterday Financial** enabled VPC Flow Logs across their dev and prod environments after a suspicious incident involving EC2 traffic spikes.  
-A few weeks later, a junior SOC analyst noticed strange outbound connections from a dev EC2 instance going to a known **crypto mining pool**.
-
-Thanks to VPC Flow Logs:
-
-- They confirmed the instance was communicating every few minutes to a **TOR exit node**  
-- They traced the **ENI** to a specific instance created by a rogue **IAM user**  
-- The logs showed **lateral connections** to RDS and EFS — luckily blocked by security groups  
-- They generated an **IOC timeline** and correlated with **GuardDuty** and **CloudTrail**  
-
-Flow Logs gave them the **map of motion**, even when no packets were left behind.
-
----
-
-## Final Thoughts
-
-VPC Flow Logs aren’t just a checkbox — they are your **network black box recorder** in the cloud.  
-They don’t give you the entire conversation, but they tell you **who spoke to whom, when, and over what protocol**.
-
-In security, that’s gold.
-
-Used wisely, they allow you to:
-
-- Hunt for threats  
-- Prove activity  
-- Trace compromise  
-- Validate segmentation  
-- Meet compliance  
-
-And when paired with **CloudTrail**, **DNS logs**, and **threat feeds** — VPC Flow Logs become the **foundation for modern cloud forensics and network detection**.
-
-> Don’t just turn them on.  
-> **Instrument them. Analyze them. And most importantly — read the story they’re telling.**
+- Metadata only, at Layers 3 and 4. No payloads and no application-layer detail. Use Traffic Mirroring when you need packets.
+- Not real time, because of the aggregation interval plus publish delay.
+- Does not capture the excluded traffic listed above (DNS to Amazon, IMDS, Time Sync, DHCP, and the rest).
+- Configuration cannot be edited after creation, and peered VPCs outside your account cannot be logged.
+- Cost scales with traffic volume and the number of custom fields. For high-volume VPCs, S3 with Athena is far cheaper than CloudWatch Logs.
+- A detection and forensic signal, not prevention. Pair with GuardDuty (which consumes flow logs), Athena, and threat-intel feeds to make them actionable.
