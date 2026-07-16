@@ -1,144 +1,41 @@
-# Root Cause Analysis — Not Just Fixing the Symptom  
+# Root Cause Analysis (RCA)
 
----
+The Post-Incident Activity practice of determining not just what happened but **why**, and what will prevent recurrence, rather than patching the symptom and moving on. It is the learning phase of the incident response lifecycle. In AWS you build the RCA from the same log and configuration sources you used to scope the incident, and its output is a set of preventive controls that feed back into Preparation. The exam frames RCA as the step that turns an incident into hardening.
 
-## The Problem
+The mental split is symptom versus root cause. The symptom is what broke (a bucket went public, a key was abused). The root cause is why it was possible (no automated policy check, a committed secret, no ownership of secure defaults). RCA drills from one to the other, usually with the 5 Whys, and ends in action items that become controls. It is blameless on people and pointed on process.
 
-Most teams stop too early in incident response.  
-Something breaks.  
-Someone patches it.  
-Services come back up.  
-Everyone moves on.
+## How it works
 
-But if you don’t ask *why* it broke in the first place — you’re not solving the real problem.  
-You’re just applying a band-aid to something that’s going to bleed again later.  
+- **Reconstruct the timeline from AWS evidence**: **CloudTrail** for the who, what, and when of API calls, **VPC Flow Logs** for network activity, **AWS Config** for the configuration and change history that shows what changed and when the flaw was introduced, **Detective** to correlate the sequence and surface the root cause (finding groups map to MITRE ATT&CK, with up to a year of history), plus GuardDuty findings and Athena over the logs.
+- **Drill to root cause**: use the **5 Whys** (or a fishbone or fault-tree analysis) to push past the proximate action to the systemic gap.
+- **Structure the report**: incident summary, impact, a factual timeline (no blame), the root cause, contributing factors (logging gaps, noisy alerts, missing guardrails), the resolution, lessons learned, and action items with owners and due dates.
+- **Stay blameless**: name process failures ("no required review on IAM changes," "rollback never tested," "no alert on logins from new geographies"), not individuals. Blame produces silence, and silence kills learning.
+- **Feed Preparation**: the action items become preventive controls: **Config rules** for the misconfiguration class, **SCPs** and MFA enforcement, new CloudWatch alarms, detection tuning (GuardDuty suppression rules, Security Hub automation rules), and updated playbooks and runbooks.
+- **AWS tooling for the RCA itself**: **Systems Manager Incident Manager** has a built-in post-incident analysis feature that generates a structured retrospective and action items from the incident, and **AWS Security Incident Response** case history and reports feed the analysis.
 
-**Root Cause Analysis (RCA)** is about digging deep.  
-Not just *what* happened, but *why* it happened and what you’ll do to prevent it next time.
+## Symptom vs root cause
 
----
+| Symptom | Root cause |
+|---|---|
+| EC2 instance unreachable | Security group misconfiguration with no automated check |
+| S3 bucket publicly accessible | No Config rule or guardrail enforcing secure bucket defaults |
+| IAM key used by an attacker | A secret committed to a public repo, no secret scanning |
+| Unauthorized login via API | No MFA, and a key reused from a prior breach |
+| Lambda failing after a deploy | Upstream breaking change with no versioning or canary |
 
-## Why Root Cause Analysis Matters
+## What gets tested
 
-If you skip RCA, here’s what tends to happen:
-- Outages and security events repeat themselves  
-- The same vulnerabilities go unpatched  
-- You waste engineering hours fixing the same issues over and over  
-- Stakeholder confidence drops (execs, customers, compliance)  
-- Detection doesn’t improve, because you’re not learning  
+- RCA is the Post-Incident Activity phase: why it happened plus prevention, not just the fix. It closes the incident-response loop back to Preparation.
+- Reconstruct with CloudTrail (the identity and API timeline), Config (the configuration change history showing what changed and when), VPC Flow Logs, and Detective (the sequence and root cause, mapped to MITRE ATT&CK). Config is the workhorse for "what changed and when."
+- The root cause is the systemic gap, not the proximate action. "Someone made the bucket public" is the symptom, "no automated policy check or secure-default guardrail" is the root cause.
+- Action items become preventive controls: Config rules, SCPs, MFA, alarms, and detection tuning, all of which feed Preparation.
+- Blameless RCA focuses on process, not people, because blame suppresses the reporting the analysis depends on.
+- Systems Manager Incident Manager provides built-in post-incident analysis, tying RCA to the response-plan tooling.
 
-**RCA turns pain into progress.**  
-It turns incidents into fuel for hardening your systems, your processes, and your team’s mindset.
+## Limitations
 
-## Symptom vs Root Cause
-
-Here’s what that difference looks like:
-
-| Symptom                        | Root Cause                                              |
-|-------------------------------|----------------------------------------------------------|
-| EC2 instance unreachable       | Security group misconfiguration                         |
-| S3 bucket publicly accessible  | Lack of automated checks for bucket policies            |
-| IAM key used by attacker       | Developer committed .env file to GitHub                 |
-| Lambda throwing API error      | Upstream service deployed breaking change, no versioning |
-| Unauthorized login via API     | No MFA, key reused from prior breach                    |
-
-> You can’t stop at the surface.  
-> You need to ask:  
-> *Why was this possible?*  
-> *What would have prevented it?*
-
----
-
-## The 5 Whys Technique
-
-A simple (but powerful) RCA method: keep asking **why** until you hit the real cause.
-
-**Example:**
-- Why was the S3 bucket public?  
-  → Because someone removed the deny policy.  
-- Why did they do that?  
-  → The app was failing in test and they wanted to debug quickly.  
-- Why didn’t they use a safer debug method?  
-  → They didn’t know how and were under pressure.  
-- Why wasn’t there a default protection or SOP?  
-  → Because the org never published S3 hardening guidelines.  
-- Why not?  
-  → Because no one owns cloud policy education internally.  
-
-So the root cause is **not** “someone made a bucket public.”  
-It’s **“lack of internal guidance and ownership around secure S3 defaults.”**
-
-> Now you can fix the real issue.
-
----
-
-## RCA Report Template (What to Capture)
-
-You don’t need to write a novel — but you do need a consistent format.
-
-**Incident Summary**
-- What happened  
-- When and how it was detected  
-
-**Impact**
-- Who or what was affected  
-- Duration and severity  
-
-**Timeline of Events**
-- Chronological facts  
-- No emotion, no blame  
-
-**Root Cause**
-- Go beyond symptoms  
-- Document the underlying flaw  
-
-**Contributing Factors**
-- Weak alerts, noisy logs, poor architecture  
-- Anything that made it worse  
-
-**Resolution**
-- What fixed it (temporary or long-term)  
-
-**Lessons Learned**
-- What caught you off guard?  
-- What should change going forward?  
-
-**Action Items**
-- Code/process/tooling fixes  
-- Due dates + owners  
-- Timeline for completion  
-
----
-
-## Blameless ≠ Toothless
-
-“Blameless” doesn’t mean “soft.”  
-It means we don’t single out people — but we *do* call out process failures.
-
-It’s okay to say:
-- “No required code reviews on IAM changes”  
-- “Rollback procedures were never tested”  
-- “No alert on critical logins from new geos”  
-
-But the moment you start pointing fingers at individuals, people shut down.  
-**Blame leads to silence.**  
-**Silence kills learning.**
-
----
-
-## Final Thoughts
-
-Incidents are your system’s way of saying:  
-**“Something’s wrong — please look deeper.”**
-
-Fix the fire, yes. But then go figure out **who built the flammable walls**.
-
-**Root Cause Analysis** is your best tool for long-term maturity:
-- Fewer repeat incidents  
-- Stronger infrastructure  
-- Better team alignment  
-- Increased trust  
-
-You didn’t go through all that pain just to move on.  
-**Ask why. Then ask again. And again.**  
-That’s how you stop reacting — and start building **resilient systems**.
+- RCA quality is bounded by evidence. Gaps in CloudTrail, Config, or VPC Flow Logs leave the timeline incomplete, which ties this back to your logging, scoping, and forensics practices.
+- It is the most-skipped phase. Exhausted teams move on, so RCA needs to be a required, owned deliverable, not an optional one.
+- The 5 Whys can stop too early or chase a single line of causation. Combine it with a contributing-factors analysis for complex incidents.
+- Action items without owners and due dates do not get done. An RCA that changes no controls is theater.
+- RCA is learning, not response. It happens after containment and recovery, not during them.

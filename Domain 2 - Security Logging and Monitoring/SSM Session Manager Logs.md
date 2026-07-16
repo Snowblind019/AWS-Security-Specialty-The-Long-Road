@@ -1,155 +1,38 @@
-# SSM Session Manager Logs  
+# SSM Session Manager Logs
 
----
+**Session Manager** (a capability of AWS Systems Manager) gives keyless, portless, bastion-less interactive shell access to EC2, on-premises, and edge instances through the **SSM Agent** and **IAM**, with no inbound ports, SSH keys, or jump hosts. Its **logging** captures what happened inside each session (commands and full shell output) to **CloudWatch Logs** and/or **S3**, optionally KMS-encrypted. In the exam it is the secure-remote-access answer and the in-session audit trail, and it is the complement to CloudTrail, not a replacement for it.
 
-## What Is It
+The mental split is access versus record, and CloudTrail versus session logging. Session Manager replaces SSH and bastions with IAM-gated, encrypted, logged access. **CloudTrail** records that a session was started and by whom. **Session Manager logging** records what was typed and returned inside it. They are two different logs, and you need both for the full picture.
 
-Session Manager, a capability within AWS Systems Manager (SSM), allows you to securely connect to your Amazon EC2 instances, on-prem servers, or edge devices **without needing to open inbound ports, manage SSH keys, or use bastion hosts.**
+## How it works
 
-When enabled properly, Session Manager lets you launch secure interactive shell sessions to EC2 machines using **IAM controls, audit trails, encryption, and centralized logging**. That’s where SSM Session Logs come in.
+- **Access model**: the SSM Agent on the instance, plus an instance profile (typically `AmazonSSMManagedInstanceCore`), makes an outbound TLS connection to Systems Manager. A user starts a session with `ssm:StartSession`. No inbound port 22 or 3389, no SSH keys, no bastion.
+- **Logging destinations**: configured in the account and Region-level **Session Manager preferences**: CloudWatch Logs, S3, or both, with optional **KMS encryption of the session data end to end**. Logs capture start and end time, the IAM principal, instance ID, commands, and full shell output when enabled.
+- **IAM**: `ssm:StartSession`, `ssm:TerminateSession`, and `ssm:ResumeSession`, scoped by instance tags or by session document. The `ssm:SessionDocumentAccessCheck` condition enforces that a caller may only use session documents they have access to, which is a privilege-escalation guardrail. The instance role also needs permission to write to the log destination.
+- **Enforcing logging**: logging is set in the account and Region-level preferences, which apply to every session, so you enforce it there and then restrict who can modify preferences or use custom documents. It is not enforced per session through `SessionDocumentAccessCheck`.
+- **Analysis**: CloudWatch Logs Insights over the CloudWatch destination, Athena over the S3 destination, metric filters or Lambda to alert on risky commands, and correlation with CloudTrail, GuardDuty, and Security Hub.
+- **Accountability options**: Run As runs the session as a specific OS user, and a restricted session document can allow only specific commands.
 
-These logs capture *everything* that happened during a session: **who connected, when, for how long, what they did**, and optionally — even the full input/output stream (command history and terminal output). This is *critical* for cloud security, compliance, incident response, and least privilege enforcement.
+## CloudTrail vs Session Manager logging
 
----
+| Layer | Captures | Destination |
+|---|---|---|
+| CloudTrail | The API event: session started, resumed, or terminated, by whom, and when | CloudTrail (S3, CloudWatch) |
+| Session Manager logging | In-session activity: commands typed and shell output returned | CloudWatch Logs and/or S3 |
 
-## Cybersecurity Analogy
+## What gets tested
 
-Imagine your datacenter has a “bastion room” where engineers can go to plug directly into servers. Now imagine that:
-
-- Every time someone enters, a guard checks their badge (**IAM**)
-- A CCTV camera records everything they do (**CloudWatch Logs or S3 logs**)
-- You store those tapes for 6 months in a fireproof safe (**Log Retention**)
-
-That’s what Session Manager + logging gives you — **secure access + visibility + evidence**.
-
-Without logs? It’s like letting people into the data center through the back door with *no cameras* and *no record* of what they touched.
-
-## Real-World Analogy
-
-Picture a shared laptop in a school computer lab. If multiple people log in and out, but there’s no account tracking or screen recording, you’ll never know who installed malware, deleted a file, or tampered with system settings.
-
-**Session Manager Logs give you that accountability.** If something goes wrong (like a config change or data breach), you can go back and see *exactly who did what* — in full detail.
-
----
-
-## Where Logs Can Go
-
-You can configure Session Manager to send logs to:
-
-| **Destination**         | **Purpose / Notes**                                               |
-|-------------------------|-------------------------------------------------------------------|
-| **Amazon S3**           | Long-term archival. Great for compliance, backups, forensics.     |
-| **Amazon CloudWatch Logs** | Real-time visibility and querying using Logs Insights. Useful for detection pipelines. |
-| **Both**                | Best practice for both short-term visibility and long-term retention. |
-
-These logs can include:
-
-- Session start and end time  
-- Username / IAM principal  
-- Instance ID  
-- Commands entered  
-- Full shell output (if configured)
-
-You decide the granularity. If you want the **full transcript** (like a keylogger), that’s possible — but you must enable it explicitly.
-
----
-
-## How Logging Works
-
-You configure Session Manager preferences:
-
-- Choose S3 bucket and/or CloudWatch Logs group  
-- Assign appropriate IAM permissions to allow log delivery  
-
-**When a session starts:**
-
-- An SSM agent on the instance communicates with the Systems Manager backend  
-- It establishes an encrypted channel between the user’s terminal and the instance  
-- The agent streams logs to S3 or CloudWatch in near real-time or on session close  
-
-You can then:
-
-- View logs in **CloudWatch Logs Insights**
-- Trigger alerts if suspicious commands are used (via **Metric Filters** or **Lambda**)
-- Archive logs for X days/months/years depending on policy
-
----
-
-## IAM Requirements
-
-You must grant IAM users/roles permissions to:
-
-- `ssm:StartSession` (start a session)  
-- `ssm:TerminateSession` (terminate session)  
-- `logs:*` or `s3:*` (access logs, depending on destination)
-
-**To enforce log delivery**, use Session Policies to require that sessions *cannot* start unless logging is enabled.
-
-**Example policy to enforce logs:**
-
-```json
-{
-  "Effect": "Deny",
-  "Action": "ssm:StartSession",
-  "Resource": "*",
-  "Condition": {
-    "BoolIfExists": {
-      "ssm:SessionDocumentAccessCheck": "false"
-    }
-  }
-}
-```
-
----
-
-## Security & Compliance Benefits
-
-- No more SSH keys or open ports → **Reduced attack surface**
-- Full audit trail of administrator actions → **Helps meet SOC2, PCI-DSS, ISO, FedRAMP, etc.**
-- Centralized logging across all regions/accounts → **Easier detection, investigation, and correlation**
-- Live analysis with **CloudWatch Logs Insights** → **Great for Security Operations Center (SOC)**
-
----
-
-## Forensics Use Case
-
-You detect **unusual traffic** from an EC2 instance. With SSM logs, you can:
-
-- Check if anyone logged in via Session Manager  
-- View timestamped commands like `curl`, `wget`, or `base64`  
-- Tie it to an IAM principal (e.g., intern, contractor, automated role)  
-- Download the full transcript for investigation  
-- Use **CloudTrail + SSM logs** to map behavior across services  
-
-This is **much more detailed** than CloudTrail alone.
-
----
+- Session Manager is the keyless, portless, bastion-less secure-access answer. No inbound 22 or 3389, no SSH keys, IAM-gated. That reduced attack surface is the headline benefit and the usual answer to "give admins shell access without opening ports or managing keys."
+- CloudTrail versus session logging is the pivot: CloudTrail shows that X started a session at time T, while Session Manager logging shows what was done inside it. To see in-session commands you need session logging, not CloudTrail alone.
+- Log destinations are CloudWatch Logs, S3, or both, with optional KMS encryption of session data, all configured in the account and Region-level Session Manager preferences.
+- Enforce logging through those preferences (account-wide), not per-session IAM, and restrict who can change preferences and which session documents can be used.
+- Prerequisites are the SSM Agent, an instance profile, and log-write permissions. No agent or role means no session and no logs.
+- Scope access by instance tags in the IAM policy, and use Run As for per-user OS-level accountability.
 
 ## Limitations
 
-- Logging is **not enabled by default**
-- You must configure **both the destination** (S3/CloudWatch) and the **IAM roles**
-- Logs only capture **Session Manager activity** — not SSH, SCP, RDP, etc.
-- **Sensitive data** (e.g., passwords typed into shell) *will be logged* — be cautious
-- If the instance doesn’t have the **SSM Agent** or proper **IAM role** → no session, no logs
-
----
-
-## Best Practices
-
-- Enable **both CloudWatch Logs and S3** for short-term detection and long-term storage  
-- Set up **log metric filters** to flag risky commands like `chmod 777`, `curl`, `rm -rf`, `base64`, etc.  
-- Create **Athena tables** on S3 logs for querying with SQL  
-- Use **GuardDuty** and **Security Hub** to correlate these logs with findings  
-- Rotate and prune logs based on your **data retention policy**  
-- Enforce **mandatory session logging** with IAM conditions  
-
----
-
-## Final Thoughts
-
-**SSM Session Manager Logs** are one of those underrated **security goldmines**. While other services help prevent breaches, this one helps you **prove exactly what happened** when things go wrong.
-
-Think of it as the **black box flight recorder** for your EC2 sessions. It doesn’t just tell you that someone accessed the system — it **shows you everything they did once inside.**
-
-If you’re designing a secure cloud environment (especially under compliance regimes like **HIPAA, CJIS, or PCI-DSS**), enabling these logs is **non-negotiable**.
+- Off by default. You configure the destination, the IAM permissions, and the preferences.
+- It only captures Session Manager activity, not SSH, SCP, or RDP done outside it, so restrict those paths to get full coverage.
+- Port-forwarding session types have no shell transcript to log. Command and output logging applies to interactive shell sessions.
+- Secrets typed into a shell are captured in the transcript. Mitigate with KMS encryption, tight log-access controls, and restricted-command documents.
+- It needs the SSM Agent and connectivity to Systems Manager endpoints, which means VPC endpoints when the instance has no internet path.

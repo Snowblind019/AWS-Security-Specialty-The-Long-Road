@@ -1,196 +1,43 @@
-# AWS Application Recovery Controller (ARC)
-
-## What Is the Service
-
-AWS Application Recovery Controller (ARC) is a highly available, safety-critical control plane service designed to help you orchestrate and automate failovers across AWS Regions, Availability Zones, and even accounts — especially in business-critical, multi-Region architectures.
-
-Unlike Auto Scaling or Route 53 Health Checks that react to resource health, ARC adds a layer of governance, quorum-based safety checks, readiness validations, and control gating to ensure failovers:
-
-- Happen safely (not accidentally or prematurely)  
-- Happen quickly (in seconds, not minutes)  
-- Only when all guardrails are satisfied  
-
-ARC isn’t designed for auto-scaling microservices. It’s for life-or-death, high-risk workloads — the kind Snowy manages when uptime isn’t just nice-to-have, but contractual.
-
----
-
-## Cybersecurity Analogy
-
-ARC is like the red failover switch in a nuclear submarine — but protected by:
-
-- Two officers turning their keys simultaneously (quorum)  
-- A set of pre-launch checks to ensure the backup system is ready (readiness checks)  
-- A secure, audited control panel (Route 53 ARC console + API)  
-
-You don’t want a failover to be:
-
-- Activated when the target system isn’t even warmed up  
-- Run by a single person without oversight  
-
-
-ARC ensures failover is deliberate, safe, and valid — not just automated chaos waiting to happen.
-
-## Real-World Analogy
-
-
-Picture Snowy's team managing a financial transaction platform running active-passive across `us-east-1` and `us-west-2`.
-
-They can’t afford to:
-
-
-- Fail over because of a momentary CPU spike  
-- Cutover to a Region that hasn’t synced data in 30 minutes  
-- Let a junior engineer accidentally push a Route 53 update  
-
-Instead, they want to:
-
-- Monitor the health of the primary Region  
-- Periodically test the backup Region for readiness  
-- Only allow failover if 3 out of 5 team members approve  
-- Trigger failover via a controlled, audited switch with rollback capability  
-
-That’s exactly what Application Recovery Controller enables.
-
----
-
-## How It Works
-
-ARC is built on two major components:
-
-### 1. Readiness Checks
-
-Evaluate whether your recovery environment is prepared to receive traffic.  
-Can validate:
-
-- Route 53 DNS records  
-- ELB/ALB health  
-- Target Group health  
-- CloudWatch alarms  
-- Custom endpoints  
-
-These run continuously in the background.
-
-### 2. Routing Controls
-
-These are gated switches that enable/disable traffic flow to specific Regions or Availability Zones.
-
-- Controlled via the ARC Control Panel  
-- Supports manual or programmatic failover  
-- Can use quorum approval logic to require N-of-M people to authorize changes  
-- Integrated with Route 53 Application Recovery Controller DNS Routing Policies  
-
-### Other Elements
-
-- **Clusters:** group Routing Controls across Regions for failover coordination  
-- **Control Panels:** logical groups of routing controls (e.g., per environment)  
-- **Safety Rules:** ensure that changes don’t violate business logic (e.g., “never have both East and West active simultaneously”)  
-
-ARC also integrates with:
-
-- **CloudWatch** for observability  
-- **CloudTrail** for change tracking and compliance logs  
-
----
-
-## Security and Compliance Relevance
-
-
-ARC is built for critical compliance and uptime environments, including financial, healthcare, government, and telecom systems that require:
-
-
-| Requirement                | ARC Feature That Satisfies It                                        |
-|----------------------------|----------------------------------------------------------------------|
-| Manual + audited failover  | Quorum control, CloudTrail integration                              |
-
-| Zero downtime cutover      | Pre-warmed standby Region validated via Readiness Checks            |
-
-| RTO/RPO policy alignment   | Continuous health checks + control over failover timing             |
-| Prevent split-brain        | Safety rules that disallow conflicting Region states                |
-| Separation of duties       | IAM-based control per team + approval logic                         |
-
-| Immutable records of decisions | CloudTrail + Route 53 ARC logs                                 |
-| Zero-trust failover control| Least-privilege IAM access + centralized, gated switch panel        |
-
-Snowy's security team loved ARC because it meant **no one could cut corners under pressure**.  
-Failovers had to be:
-
-- Reviewed  
-- Approved  
-- Verified as safe  
-- Audited and recoverable  
-
----
-
-## Pricing Model
-
-You pay for:
-
-- Control Panels (monthly)  
-- Readiness Checks (per check, monthly)  
-- Routing Controls (per Region, per control)  
-- Route 53 ARC integrations (standard DNS charges apply)  
-
-Costs scale with complexity — but are negligible compared to the cost of downtime or failed failovers.
-
----
-
-## Real-Life Example (Snowy’s Tier-1 Failover Architecture)
-
-Snowy’s team maintains a **public safety dispatch platform** with a strict SLA: **99.999% uptime across regions.**
-
-### Setup:
-
-- **ECS/Fargate services** in `us-east-1` (primary) and `us-west-2` (standby)  
-- Route 53 Application Recovery Controller used for DNS failover  
-
-### ARC Readiness Checks run every minute on:
-
-- Target Group health  
-- IAM role assumptions  
-
-- Redis cache readiness  
-
-### ARC Routing Controls are used to:
-
-- Enable/disable DNS record sets for traffic flow  
-- Require 2 out of 3 approvers (Snowy, Winterday, Blizzard) to confirm failover  
-
-- Prevent simultaneous Region activation  
-
-
-### Outcome:
-
-During a simulated outage of `us-east-1`, ARC:
-
-
-- Validated that `us-west-2` was ready  
-- Required quorum authorization  
-- Shifted Route 53 records in <1 minute  
-- Logged all changes to CloudTrail for compliance  
-
-- Prevented split-brain via Safety Rules  
-
----
-
-## Final Thoughts
-
-**AWS Application Recovery Controller is not just a DNS switch — it's a failover governance system.**  
-It’s built for teams that:
-
-- Can’t afford mistakes  
-- Can’t trust fragile automation  
-- Need bulletproof audit trails  
-
-In Snowy’s world — where uptime is contract-bound, failover is mission-critical, and compliance is real — **ARC is the final checkpoint before production pivots**.
-
-It brings:
-
-- Operational safety  
-- Quorum-based approvals  
-- Pre-validated recovery conditions  
-- Multi-Region orchestration at the control plane level  
-
-If you’re running anything with **hard SLAs**, **cross-Region HA**, or **compliance gates** — this is your final guardrail.  
-It doesn’t replace Route 53 or health checks.  
-**It wraps them in safety logic.**
-
+# Amazon Application Recovery Controller (ARC)
+
+A set of highly available recovery primitives (formerly Amazon Route 53 Application Recovery Controller) for mitigating **Availability Zone or Region impairments** in multi-AZ and multi-Region applications. ARC is engineered to keep operating when the rest of a Region is having a bad day, which is the whole design point. It spans two domains: **Multi-AZ recovery** (zonal shift and zonal autoshift) and **Multi-Region recovery** (routing control with safety rules, Region switch, and readiness check). For the security exam it sits in the resilience and incident-response area, and the security-relevant piece is that routing controls are IAM-gated, CloudTrail-audited, and guarded by safety rules so failover cannot be forced into an unsafe state under pressure.
+
+The mental split is Multi-AZ vs Multi-Region. Multi-AZ is zonal shift (you manually move traffic off a bad AZ) and zonal autoshift (AWS moves it for you based on its telemetry). Multi-Region is routing controls (highly available on/off switches with safety rules), Region switch (full-stack failover orchestration), and readiness check (a configuration-parity monitor, not a health check). ARC does not react to resource health the way Route 53 health checks or Auto Scaling do. It is the deliberate, resilient control layer you operate on top of them.
+
+## How it works
+
+- **Zonal shift (Multi-AZ, manual)**: temporarily move traffic for a supported resource away from an impaired AZ to healthy AZs in the same Region. Supported resources include **ALB, NLB, EC2 Auto Scaling groups, and EKS**. Shifts are temporary, with an expiration of up to **3 days** (extendable).
+- **Zonal autoshift (Multi-AZ, automatic)**: you authorize AWS to shift traffic off an AZ its internal telemetry flags as impaired, and to shift it back when the signal clears. Practice runs validate it, and you pre-scale capacity so a shift completes without waiting on Auto Scaling.
+- **Routing control (Multi-Region, manual)**: highly available on/off switches that gate Regional traffic, typically by driving Route 53 health check state. The **cluster** is a data plane of **endpoints in 5 AWS Regions**, and any one endpoint can flip a control, so you can change routing state even while a Region is down. During an event you drive changes through the **data-plane API across all five endpoints, not the console**, because the console can be affected by the same impairment.
+- **Safety rules**: **assertion rules** force a set of routing controls to maintain a required state (for example, at least one cell must stay On, so an exhausted operator cannot disable the last healthy Region), and **gating rules** let an overriding control gate changes to others (preventing split-brain, such as both Regions active when you require active-passive).
+- **Readiness check (Multi-Region)**: continuously monitors resource quotas, capacity, and routing configuration for **parity across Regions** and surfaces drift. It is explicitly **not** a health monitor and **not** for the failover critical path. It is **closed to new customers as of April 30, 2026**, and AWS directs new designs to Region switch plan evaluation.
+- **Region switch (Multi-Region)**: the newer fully managed orchestration for coordinated full-stack failover via declarative recovery plans (scaling compute, switching over databases, shifting DNS), with plan evaluation and automated practice runs.
+- **Integrations**: Route 53 health checks, CloudWatch for observability, CloudTrail for an audit trail, and IAM for least-privilege gating of who can flip a control.
+
+## ARC capabilities
+
+| Capability | Domain | Trigger | What it does |
+|---|---|---|---|
+| Zonal shift | Multi-AZ | Manual | Temporarily move traffic off an impaired AZ (ALB, NLB, EC2 ASG, EKS), up to 3 days |
+| Zonal autoshift | Multi-AZ | AWS automatic | AWS shifts traffic off an AZ its telemetry flags as impaired, then back |
+| Routing control | Multi-Region | Manual via API | Highly available on/off switches gating Regional traffic, guarded by safety rules |
+| Region switch | Multi-Region | Orchestrated plan | Declarative full-stack cross-Region failover (compute, database, DNS) |
+| Readiness check | Multi-Region | Continuous | Parity monitor for quota, capacity, and config drift (closed to new customers 4/30/2026) |
+
+## What gets tested
+
+- ARC is deliberate, highly available recovery control, not a health-reactive autoscaler. Its value is that the control path keeps working when a Region is impaired.
+- The cluster quorum is a data-plane design, not human approvals. Routing control endpoints live in 5 Regions and any one can flip a control, so state can change during a Regional outage. During an event, use the data-plane API across all five endpoints, not the console.
+- Safety rules keep state valid: assertion rules force a set of controls to hold a required state (so you cannot disable the last healthy Region), and gating rules let an overriding control gate others (preventing split-brain when you require active-passive).
+- Zonal shift (manual) versus zonal autoshift (AWS-initiated from telemetry) is the Multi-AZ pair. Supported resources include ALB, NLB, EC2 Auto Scaling groups, and EKS, shifts are temporary up to 3 days, and you pre-scale capacity so a shift does not wait on Auto Scaling.
+- Readiness check is a parity and drift monitor across Regions, not a health check, and never belongs in the failover critical path. It is closed to new customers as of April 30, 2026, with Region switch plan evaluation as the successor.
+- Region switch is the newer answer for coordinated, full-stack multi-Region failover orchestration.
+- The security framing is separation of duties and guardrails: routing controls are IAM-gated and CloudTrail-audited, and safety rules enforce invariants so no one can force an unsafe state under pressure. It is not a human voting quorum.
+
+## Limitations
+
+- Readiness check is closed to new customers (April 30, 2026), and even where available it is a parity monitor, never a failover trigger or a health check.
+- Do not rely on the console during a Regional event. Drive routing controls through the five-endpoint data-plane API.
+- Zonal shift is temporary (up to 3 days) and requires opted-in supported resources plus pre-provisioned capacity in the remaining AZs to absorb the traffic.
+- ARC orchestrates and gates recovery, it does not replicate your data or stand up your standby. Cross-Region data sync and standby capacity remain your responsibility.
+- Routing control, Region switch, and readiness check are not available in the China Regions or AWS GovCloud (US), though zonal shift and zonal autoshift are.

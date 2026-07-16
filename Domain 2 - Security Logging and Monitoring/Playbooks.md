@@ -1,166 +1,42 @@
-# Playbooks & Runbooks Design  
+# Playbooks & Runbooks Design
 
-## What Are Playbooks and Runbooks
+The practice of pre-writing incident response as reusable **strategy** documents (playbooks) and step-by-step **execution** documents (runbooks), so responders execute a known process instead of improvising under pressure. In AWS this is concrete: a runbook is often a literal **SSM Automation document**, and it can be wired to EventBridge, Lambda, Step Functions, and Systems Manager Incident Manager for automated response. This is a Preparation-phase deliverable in the IR lifecycle, and the exam tests both the playbook-versus-runbook distinction and the AWS automation primitives underneath.
 
-In incident response, every second matters. But people forget. People panic. People make mistakes.  
-That’s why great teams don’t rely on memory — they rely on well-designed playbooks and runbooks.  
+The mental split is strategy versus execution. A **playbook** answers what, why, and who for an incident type: triggers, severity and escalation, roles, communication plan, tools, containment objectives, and dependencies like legal or PR. A **runbook** answers how, as concrete steps, increasingly automated. In AWS the word "runbook" is the literal name for an SSM Automation document, and the more of a runbook you can automate and trigger straight from a finding, the faster and more consistent the response.
 
-- A **playbook** is the high-level strategy: *What should we do when X happens?*  
-- A **runbook** is the tactical execution: *Step-by-step instructions to actually do it.*
+## How it works
 
-Together, they bring clarity, speed, and consistency to incident handling.  
-No guessing. No reinventing. Just execution.
+- **Playbooks (strategy)**: one per incident type, such as leaked credentials, EC2 malware, S3 data exposure, insider misuse, or DDoS. Each defines triggers, severity and escalation thresholds, roles and responsibilities, the communication plan, the tools and systems involved, containment objectives, and external dependencies. High-level, reusable across environments, and involving some judgment.
+- **Runbooks (execution)**: concrete steps that assume someone (or something) is ready to act. In AWS an **SSM Automation document** is a runbook, whether an AWS-managed one or your own, and it can isolate an instance, snapshot volumes, collect memory, rotate keys, or patch.
+- **Automation wiring**: the core pattern is a finding from GuardDuty or Security Hub triggering an **EventBridge** rule that invokes **Lambda** (disable an IAM user, revoke sessions, rotate keys), **SSM Automation** (isolate or snapshot), or **Step Functions** (orchestrate a multi-step containment). Security Hub custom actions and automation rules can also trigger response.
+- **Systems Manager Incident Manager**: AWS's productized response system. **Response plans** tie runbooks, responder engagement (contacts and escalation), and chat channels to CloudWatch alarms or EventBridge, and drive structured post-incident analysis. This is the AWS-native way to operationalize a playbook plus runbook plus on-call.
+- **AWS Security Incident Response (managed service)**: provides managed triage, coordination, and containment for the critical findings, with 24/7 CIRT access, complementing your own runbooks.
+- **Governance**: version-control playbooks and runbooks (a repo, not a wiki), test them in game days, link them to tickets, and keep a human in the loop for high-impact actions.
 
----
+## Playbook vs runbook
 
-## Cybersecurity and Real-World Analogy
+| Trait | Playbook | Runbook |
+|---|---|---|
+| Audience | IR managers, analysts | Tier-1 responders, engineers, automation |
+| Scope | High-level, strategic | Low-level, tactical |
+| Answers | Why and what | How |
+| Format | Flowcharts, tables, SOPs | Steps, AWS CLI, SSM Automation documents |
+| AWS embodiment | Incident-type playbook, Incident Manager response plan | SSM Automation document, Lambda, Step Functions |
+| Flexibility | Some judgment | Very procedural, often automated |
 
-Think of a fire drill in a high-rise building.
+## What gets tested
 
-- The **playbook** is the policy that says:  
-  “If fire is detected, evacuate floors top-down, call 911, activate sprinklers, and notify building security.”
+- Playbook equals strategy (what, why, who), runbook equals execution (how). In AWS a runbook is literally an SSM Automation document.
+- The automated-response pattern is the core exam concept: a GuardDuty or Security Hub finding to an EventBridge rule to Lambda, SSM Automation, or Step Functions. Recognize it in scenario stems.
+- Common containment automations map to incident types: isolate EC2 via SSM, disable or rotate IAM credentials and revoke sessions via Lambda, snapshot volumes, and remove S3 public access.
+- Systems Manager Incident Manager operationalizes response plans (runbooks plus on-call engagement, escalation, and post-incident analysis). Distinguish it from AWS Security Incident Response, which is the managed triage and CIRT service.
+- Playbooks and runbooks are a Preparation-phase deliverable. You build and test them before an incident, not during one.
+- High-impact actions should keep a human in the loop rather than fully auto-executing.
 
-- The **runbook** is the checklist by the exit:  
-  “Pull lever → Call fire dept at 555-5555 → Evacuate floor via Stairwell A → Close all doors → Wait at Muster Point B.”
+## Limitations
 
-In an actual emergency, people don’t stop to think. They execute what they’ve drilled.  
-In cybersecurity, it’s no different. Incidents are loud. Fast. Chaotic.  
-**Good playbooks and runbooks remove decision fatigue — so responders can focus on solving the problem.**
-
----
-
-## How They Work
-
-### Playbooks = The Strategy
-
-A playbook defines:
-- The type of incident (e.g., “Phished User Credential,” “EC2 Malware Detected,” “Data Exfiltration via S3”)
-- Severity levels and escalation thresholds
-- Roles & responsibilities (who owns what)
-- Communication plans (who to notify, when, and how)
-- Key tools/systems involved (e.g., GuardDuty, CloudTrail, IAM, SSM, etc.)
-- Containment objectives (quarantine user/resource, revoke access, block traffic)
-- Dependencies (legal review, PR comms, etc.)
-- Trigger conditions for activating the playbook
-
-**Playbooks should answer:**
-- What triggered this?  
-- What’s the goal?  
-- Who is involved?  
-- What systems are impacted?
-
-> Good playbooks are reusable across environments.
-
-### Runbooks = The Execution
-
-Runbooks are concrete, step-by-step documents.  
-They assume someone is already in front of a terminal — now what?
-
-**Example: Runbook for leaked AWS access keys**
-- Identify the IAM user from leaked key (`aws sts get-caller-identity`)
-- Rotate access keys immediately via CLI
-- Revoke all active STS tokens
-- Check CloudTrail for activity from the leaked key
-- Enable GuardDuty on the account if not already active
-- Quarantine related EC2 via SSM automation document
-- Create snapshot of affected instance volumes
-- Export logs to S3 for analysis
-- Notify SecOps lead and incident commander
-- Document everything in the ticket (with timestamps)
-
-> Good runbooks are copy-paste ready.
-
-## Characteristics of Great Playbooks & Runbooks
-
-| Trait       | Playbooks                | Runbooks                        |
-|-------------|---------------------------|----------------------------------|
-| Audience    | IR managers, analysts     | Tier 1 responders, engineers     |
-| Scope       | High-level, strategic     | Low-level, tactical              |
-| Format      | Flowcharts, tables, SOPs  | Shell commands, AWS CLI, screenshots |
-| Reusability | High across multiple scenarios | Often specific to systems/tools |
-| Flexibility | Some judgment involved    | Very procedural                  |
-| Focus       | Why and What              | How                              |
-
-## Common Security Playbooks to Build
-
-Start with your top threats:
-
-**Credential Theft (Phished User, Leaked Keys)**
-- MFA checks  
-- Key rotation  
-- IAM user disablement  
-- STS token revocation  
-- CloudTrail review  
-
-**EC2 Compromise / Malware**
-- Isolate instance via SSM  
-- Snapshot disk  
-- Dump memory (if possible)  
-- GuardDuty + VPC flow logs inspection  
-
-**S3 Bucket Data Exposure**
-- Remove public access  
-- Audit bucket policies  
-- List accessed objects via CloudTrail  
-- Notify DPO/legal if regulated data  
-
-**Insider Threat or Privilege Misuse**
-- IAM policy review  
-- Admin action replay from CloudTrail  
-- Interview or HR escalation  
-
-**DDoS / Availability Attack**
-- Engage WAF/DDoS protections  
-- Traffic redirection / autoscaling  
-- Partner escalation (e.g., AWS Shield Response Team)  
-
-## Automation Tips
-
-Where possible, bake **automation** into your runbooks.
-
-Use:
-- **SSM documents** to isolate instances, collect memory, patch  
-- **Lambda functions** triggered by EventBridge for key rotation or user disablement  
-- **Slack webhooks** for automatic alerting and team comms  
-- **AWS Step Functions** for orchestrating multi-step containment workflows  
-
-> Runbooks should link directly to these automations where available.
-
----
-
-## Real-Life Example
-
-**Playbook:** “Unauthorized API Usage from Leaked Key”  
-**Trigger:** GuardDuty finding — `InstanceCredentialExfiltration`
-
-**Runbook (simplified):**
-- Identify IAM user from the key  
-- Rotate keys  
-- Invalidate all STS tokens  
-- Review CloudTrail for actions made with key  
-- Create ticket with timeline of activity  
-- Run automated tagging of affected resources  
-- Notify security lead via Slack  
-
-> This process is fast. Repeatable. Reliable.  
-> No need to fumble around with “what do we do again?”
-
----
-
-## Final Thoughts
-
-In a live incident, you don’t rise to the occasion — you fall to the level of your preparation.  
-And nothing prepares you better than solid playbooks and airtight runbooks.
-
-They turn chaos into flow.  
-They empower even junior responders to act with confidence.  
-They reduce mistakes, improve MTTR, and enforce consistency across shifts.
-
-Don’t keep these in someone’s head.  
-Don’t hide them in dusty wikis.
-
-- **Version them.**  
-- **Link them to tickets.**  
-- **Keep them close.**
-
-> Your future self will thank you when everything is on fire — and you can just follow the checklist.
+- A runbook is only as good as its last test. Untested runbooks fail during a real incident, so exercise them in game days.
+- Over-automation is a real risk. Auto-containment on a false positive can take down production, so gate high-impact actions with an approval step (Step Functions approval or Incident Manager engagement).
+- Runbooks drift as the environment changes. Version and review them, or they will reference resources that no longer exist.
+- They reduce MTTR and mistakes but do not replace judgment for novel incidents that no playbook anticipated.
+- Enabling detection mid-incident is too late. Detection coverage belongs in Preparation, not in a runbook step.

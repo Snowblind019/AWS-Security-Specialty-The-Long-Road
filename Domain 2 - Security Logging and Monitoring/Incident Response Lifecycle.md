@@ -1,202 +1,43 @@
-# Incident Response Lifecycle  
+# Incident Response Lifecycle
 
-## What is the Incident Response Lifecycle 
+The structured process to prepare for, detect, contain, eradicate, recover from, and learn from security incidents, so response is controlled and repeatable rather than improvised. AWS aligns its **Security Incident Response Guide** to the **NIST SP 800-61** lifecycle. In the exam this is the backbone of the Incident Response domain, and the high-value skill is mapping each phase to the specific AWS services that carry it out.
 
-The **Incident Response Lifecycle** is the structured process organizations follow to detect, respond to, and recover from cybersecurity incidents.  
-It’s not just a checklist — it’s a mindset.  
+The canonical model is NIST 800-61's four phases: **Preparation; Detection and Analysis; Containment, Eradication, and Recovery; and Post-Incident Activity**. Operators often split the middle into three, which is the SANS PICERL six-step view (the difference is grouping, not substance). NIST 800-61 Revision 3 (2025) remapped these onto the CSF 2.0 functions (Govern, Identify, Protect, Detect, Respond, Recover), but the phase model is still how AWS frames IR. Preparation is the only phase entirely before an incident. The rest run as a loop, with lessons feeding back into preparation.
 
-A mature IR lifecycle ensures that you’re not just reacting to chaos but managing it in a controlled, consistent, and repeatable way.  
-Each phase builds upon the last. If you skip one or cut corners, you’re left vulnerable. If you follow it well, you’ll contain damage faster, restore systems safely, and learn from every attack to come back stronger.
+## How it works (by phase)
 
----
+- **Preparation**: build the plan, roles, and playbooks, turn on detection (GuardDuty, CloudTrail, Config, Security Hub, Macie, Inspector), pre-provision least-privilege IR roles and break-glass access, write SSM Automation runbooks, onboard AWS Security Incident Response, and run tabletop and game-day exercises. Under-preparation is the classic wrong-answer setup.
+- **Detection and Analysis**: findings arrive from GuardDuty, Security Hub, and third-party tools via Security Hub. You triage (true or false positive), scope the blast radius, and set severity using Detective, CloudTrail, VPC Flow Logs, and Athena, with EventBridge routing alerts. This is the Finding Validation and Scoping work.
+- **Containment**: stop the spread. **Short-term** actions isolate an EC2 instance with a deny-all forensic security group, detach it from its Auto Scaling group, revoke the instance role's sessions, disable or rotate credentials, and block IPs via WAF or NACLs. **Long-term** actions are segmentation and patching that let you keep operating while you eradicate. Preserve evidence before anything destroys it.
+- **Eradication**: remove the foothold: backdoors, rogue IAM users or roles, persistence Lambdas, and malware. Patch the exploited vulnerability, rotate every potentially exposed credential, and hunt indicators of compromise across the environment with Detective finding groups and Athena.
+- **Recovery**: restore from known-good state (a hardened AMI, AWS Backup, or DRS point-in-time), reintroduce traffic in stages (Route 53 or ARC), and keep heightened monitoring for about 30 days to catch re-entry.
+- **Post-Incident Activity**: produce a root-cause analysis and lessons-learned, tune detections (GuardDuty suppression rules, Security Hub automation rules), update playbooks, and harden controls (SCPs, MFA). This is the most-skipped phase, and its output feeds the next Preparation.
+- **AWS Security Incident Response (managed service)**: launched at re:Invent 2024, it monitors and triages findings from GuardDuty and Security Hub CSPM (and third-party tools through Security Hub), automatically filtering over 99 percent and opening cases only for the critical few, with 24/7 access to the AWS Customer Incident Response Team (CIRT), coordinated communication, and containment actions. It aligns to NIST 800-61 and requires AWS Organizations with all features enabled. It is not a detection service and not an alert aggregator, it ingests and triages what your detectors produce. The **CIRT** does log-based and control-plane investigation, not host or memory forensics, for which AWS points to a DFIR partner.
 
-## Cybersecurity and Real-World Analogy
+## Phases mapped to AWS services
 
-Imagine a hospital emergency room.
+| Phase | Goal | Key AWS services |
+|---|---|---|
+| Preparation | Be ready before it happens | GuardDuty, CloudTrail, Config, Security Hub, SSM runbooks, IR roles, Security Incident Response onboarding |
+| Detection and Analysis | Confirm it is real and scope it | GuardDuty, Security Hub, Detective, CloudTrail, VPC Flow Logs, Athena, EventBridge |
+| Containment | Stop the spread | SSM Automation, forensic security group, revoke role sessions, WAF/NACL, IAM disable |
+| Eradication | Remove the foothold | Detective finding groups, Athena, credential rotation, patching |
+| Recovery | Restore with confidence | AWS Backup, Elastic Disaster Recovery, hardened AMIs, Route 53, ARC |
+| Post-Incident Activity | Learn and improve | GuardDuty suppression rules, Security Hub automation rules, updated playbooks, SCPs |
 
-- **Preparation** is having the trauma team trained, the defibrillators working, and the triage process defined.  
-- **Detection & Analysis** is when someone walks in with chest pain, and nurses assess vitals and run diagnostics.  
-- **Containment** is stabilizing the patient and stopping the heart attack from getting worse.  
-- **Eradication** is clearing the blood clot.  
-- **Recovery** is monitoring the patient until they’re strong enough to leave the ICU.  
-- **Post-Incident** is the medical team reviewing the case, seeing what went well, what didn’t, and updating protocols.
+## What gets tested
 
-Cybersecurity incidents are no different.  
-You prepare your people and systems, detect abnormal behavior, isolate the threat, remove it, restore operations, and then analyze and improve for the next time.  
-That’s how you build **cyber resilience**.
+- The NIST 800-61 four phases (and the SANS six-step grouping) are the framework, and AWS aligns to NIST 800-61. Know the order, and that you never jump to recovery before eradication is complete.
+- Each phase has its AWS services: detection is GuardDuty, Security Hub, and CloudTrail, investigation is Detective, containment is SSM plus a forensic security group and session revocation, recovery is AWS Backup and DRS, and tuning is suppression and automation rules.
+- AWS Security Incident Response is the managed triage-and-response service. It ingests and triages GuardDuty and Security Hub CSPM findings, filters over 99 percent, opens cases for the critical few, and gives 24/7 CIRT access with containment and coordination. It is not detection (GuardDuty), not aggregation (Security Hub), and not investigation (Detective), and it needs Organizations with all features.
+- Sequencing is testable: contain before eradicate before recover, and preserve evidence before containment can destroy it.
+- Short-term versus long-term containment: isolate immediately, then segment and patch sustainably.
+- Preparation determines everything downstream. Pre-provisioned roles, playbooks, and enabled logging are what make the later phases possible.
+- The lifecycle is a loop. Post-incident tuning and playbook updates feed back into Preparation.
 
----
+## Limitations
 
-## How It Works
-
-### 1. Preparation
-
-This is the **foundation** of everything.  
-If you fail here, every other phase suffers.
-
-Includes:
-- Building an IR plan and keeping it updated  
-- Defining roles (incident commander, comms lead, forensic lead, etc.)  
-- Training staff and running tabletop exercises  
-- Pre-authorizing access for forensics and containment (IAM, SSM, etc.)  
-- Creating playbooks and runbooks  
-- Setting up detection tooling (GuardDuty, CloudTrail, Security Hub, SIEM)  
-
-> Without preparation, you’ll be scrambling during a real incident — guessing instead of executing.
-
-### 2. Detection & Analysis
-
-The moment something suspicious happens — detection kicks in.
-
-**Sources:**
-- GuardDuty findings  
-- SIEM alerts  
-- CloudTrail anomalies  
-- Endpoint Detection tools (EDR)  
-- Internal user reports  
-- 3rd party breach notifications  
-
-This phase is about **triage**:
-- Is this real or a false positive?  
-- What’s the scope? Just one EC2? Entire subnet?  
-- What’s the severity? Recon, lateral movement, data exfil?  
-- Who needs to be notified?
-
-> The goal is fast, accurate assessment.  
-> Not panic. Not assumptions. Just **facts**.
-
-### 3. Containment
-
-Once confirmed, your first job is **stop the bleeding**.
-
-**Types of containment:**
-- **Short-term:** Quarantine a VM, disable a user, block an IP in WAF  
-- **Long-term:** Network segmentation, patch rollouts, role rotations  
-
-You want to:
-- Prevent lateral movement  
-- Avoid tipping off the attacker (stealth containment is sometimes better)  
-- **Preserve evidence** — don’t destroy logs, snapshots, or memory  
-
-> A good containment buys you time to investigate without allowing further harm.
-
-### 4. Eradication
-
-Now that it’s contained, it’s time to **eliminate the root cause**.
-
-This is about **removing the attacker’s foothold**:
-- Delete backdoors or rogue accounts  
-- Clean malware or unauthorized scripts  
-- Patch vulnerable services  
-- Rotate credentials or IAM roles  
-
-This isn’t just cleanup. It’s about making sure they **can’t come back**.  
-You also want to scan for **indicators of compromise (IOCs)** across your environment — to ensure nothing else is lurking.
-
-### 5. Recovery
-
-Now you bring systems back online — **carefully**.
-
-This means:
-- Restoring services from backups or known-good states  
-- Monitoring systems closely for re-infection or re-entry  
-- Reintroducing production traffic in stages  
-- Notifying stakeholders once systems are verified clean  
-
-> Recovery should be **measured**, not rushed.  
-> You want to ensure **trust is restored** — both technically and organizationally.
-
-### 6. Post-Incident
-
-Here’s where the real growth happens.  
-This is your **retrospective**:
-
-- What worked well?  
-- What failed?  
-- Where did we detect too slowly?  
-- What automation or tooling could’ve helped?  
-- Did comms break down? Were SLAs missed?  
-- Were users or customers impacted?
-
-**Deliverables:**
-- A Root Cause Analysis (RCA) report  
-- Updated playbooks  
-- Lessons learned doc  
-- IR training updates  
-- Detection rule tuning  
-
-> This is the phase most teams skip.  
-> Don’t be one of them.  
-> It’s where you turn **pain into strength**.
-
----
-
-## Pricing Models
-
-Not directly applicable, but if you’re in AWS or a cloud platform, consider this:
-
-- **Detection tooling costs:** GuardDuty, CloudTrail, SIEM ingestion all cost money  
-- **Containment costs:** Quarantine resources = idle instances = cost  
-- **Snapshot and forensic preservation:** S3, Glacier, storage fees  
-- **Post-incident analysis:** Engineering time, legal review, PR  
-
-> **IR isn’t free. But unhandled breaches are far more expensive.**
-
----
-
-## Real-Life Example
-
-Let’s say an attacker phishes **Snowy** and gets IAM credentials.
-
-**Detection:**  
-GuardDuty fires: `IAMUser/InstanceCredentialExfiltration`
-
-**Analysis:**  
-Tier 1 reviews logs. Sees that a new EC2 was spun up with a suspicious AMI.
-
-**Containment:**  
-- Instance isolated via SSM automation  
-- IAM keys rotated  
-- STS sessions revoked  
-
-**Eradication:**  
-- Confirmed reverse shell in userdata script  
-- Removed rogue Lambda function granting persistence  
-- Patched the misconfigured bucket policy  
-
-**Recovery:**  
-- Rebuilt EC2 from hardened AMI  
-- Rolled out mandatory MFA  
-- Monitored for repeat access attempts  
-
-**Post-Incident:**  
-- **Root cause:** IAM user didn’t have MFA, creds reused  
-- **Action item:** Enforce SCP requiring MFA on all users  
-- **Lesson learned:** Email alert for GuardDuty findings was delayed — added Slack webhook  
-
-> The entire lifecycle played out — and now the org is stronger than before.
-
----
-
-## Final Thoughts
-
-**Incident response isn’t about eliminating risk — it’s about managing it with clarity and speed.**
-
-Without a lifecycle:
-- You miss alerts  
-- You delay containment  
-- You fix symptoms, not causes  
-- You forget lessons  
-
-With a mature lifecycle:
-- You respond calmly  
-- You preserve evidence  
-- You stop the spread  
-- You restore services safely  
-- You improve after every incident  
-
-Security isn’t measured by how many incidents you avoid — it’s how you respond when they inevitably happen.
-
-**Preparation, Detection & Analysis, Containment, Eradication, Recovery, and Post-Incident.**  
-It’s not a suggestion — it’s the playbook for surviving and growing through chaos.  
-> Let it guide your team. Every time.
+- The lifecycle is a loop, not a straight line. Post-incident outputs feed back into preparation, and treating it as linear is a common mistake.
+- AWS Security Incident Response requires Organizations with all features and pre-deployed CloudFormation StackSets and IAM for automated containment. CIRT performs log-based investigation only, not host or memory forensics.
+- Response quality is bounded by preparation and logging coverage. Weak logging or missing IR roles cripple the later phases, which ties this back to the logging, scoping, and forensics practices.
+- It manages risk, it does not eliminate it, and rushing recovery before eradication is the most common failure mode.
