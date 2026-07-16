@@ -1,216 +1,49 @@
 # Amazon Bedrock
 
-## What Is Amazon Bedrock
-Amazon Bedrock is AWS’s fully managed foundation model (FM) platform that lets you build and scale generative AI applications using models from top providers (like Anthropic, Cohere, Meta, Stability AI, and Amazon’s own Titan models) — without managing infrastructure, GPUs, or model weights.
+AWS's managed, serverless platform for calling foundation models (Anthropic Claude, Amazon Titan and Nova, Meta Llama, Cohere, AI21, Mistral, Stability, and others) through a single API, with no GPUs, weights, or model hosting to manage. On top of raw inference it adds customization (fine-tuning and continued pre-training), Knowledge Bases for RAG, Agents and AgentCore for tool-using workflows, and Guardrails for content control.
 
-With Bedrock, you can:
-- Access large language models (LLMs) via API
-- Customize FMs using your own data
-- Create agents that can invoke tools, make decisions, or call APIs
-- Stay inside your secure VPC, with IAM, KMS, and CloudTrail
-- Avoid the pain of fine-tuning or model deployment
+For security work the framing that matters is that Bedrock makes a model look like just another AWS API: bedrock:InvokeModel behaves like s3:GetObject, so the same IAM, KMS, VPC, and logging patterns apply. Two twists break the analogy. The request and response payloads are natural language that IAM cannot inspect, and almost every security control is opt-in rather than on by default. The thing to hold onto: your data stays in your account and is not used to train the base models, but private networking, guardrail enforcement, and content logging are all things you switch on and enforce, not defaults you inherit.
 
-Unlike open-source models that require a ton of compute setup, Bedrock gives you serverless, pay-as-you-go access to production-grade models — instantly.
+## How it works
 
-It’s especially useful for:
-- Enterprises that want LLM capabilities without managing AI infra
-- Teams building chatbots, summarizers, copilots, content generation, or decision-making agents
-- Security-conscious orgs that want compliance-ready GenAI
+- **Model access**: call bedrock:InvokeModel (or the streaming variant) over HTTPS. Access is deny-by-default and should be scoped per foundation-model ARN. Resource: * grants every model in the Region, including ones you never reviewed.
+- **Customization**: fine-tuning and continued pre-training produce a private copy of the model in your account, encrypted with your KMS key. The training data and the custom model never flow to the provider or to other customers.
+- **Knowledge Bases (RAG)**: embed your documents, store the vectors (OpenSearch Serverless and others), retrieve at query time, and inject into the prompt. No retraining. Encrypt the vector store and the source data with KMS.
+- **Agents and AgentCore**: turn a model plus tools (Lambda, APIs) into a workflow that can act. Agents is the higher-level managed abstraction; AgentCore is the framework-agnostic runtime platform. Actions widen the blast radius, so scope the tool roles tightly.
+- **Guardrails**: filter prompts and completions for harmful content, denied topics, and PII (redact or block). Attached per invocation via guardrailIdentifier.
+- **Data privacy**: prompts, completions, and embeddings stay in your account and Region, are not used to train base models, and are not shared with providers.
 
----
+The enforcement layer, which is the opt-in part and the part the exam probes:
 
-## Cybersecurity Analogy
-Think of Bedrock like an air-gapped AI supercomputer you can query securely. You don’t install anything. You don’t download weights. You don’t train GPUs. But you get instant access to models that can understand, write, generate, or reason — all inside your VPC, wrapped in IAM, KMS, and audit logs.
+- **IAM**: scope bedrock:InvokeModel per model ARN and gate admin actions separately. Use the bedrock:GuardrailIdentifier condition key to deny any invocation that omits the approved guardrail, or set the account-level enforced-guardrail configuration. A guardrail a code path can skip is not a control.
+- **VPC and PrivateLink**: the public Bedrock endpoint is reachable from anywhere the principal is valid. Keep traffic private with interface VPC endpoints for both the control and runtime planes.
+- **KMS**: encrypt custom models, Knowledge Bases, agents, and invocation logs with customer-managed keys.
+- **Two separate logs**: CloudTrail records the invocation metadata (who called which API, when, from where) but never the prompt or completion. Model invocation logging is the separate feature that captures the actual prompt and completion bodies, to CloudWatch Logs, S3, or Firehose. You need both, and they record different things.
 
-It’s like having OpenAI + Anthropic + Meta behind a firewall — with zero risk of data leakage to public endpoints.
+## Amazon Bedrock vs sibling options
 
-## Real-World Analogy
-Let’s say Snowy wants to build a support chatbot for a telecom provider. He needs a powerful LLM to:
-- Understand user questions
-- Retrieve info from internal docs
-- Summarize the answer
-- Maybe even place a ticket
+| | Bedrock | SageMaker (JumpStart / self-host) | Self-hosted (EC2 / EKS) | Direct third-party API |
+|---|---|---|---|---|
+| Infra | None, serverless | You manage endpoints | You manage everything | None |
+| Models | Managed catalog, many providers | Bring or deploy your own | Whatever you host | Vendor's only |
+| Data boundary | Stays in your account / Region | Your account | Your account | Leaves to the vendor |
+| Native IAM / KMS / VPC | Yes, but opt-in | Yes | You build it | No |
+| Best for | Fast, secure managed GenAI | Full control of the model, ML teams | Total control, heavy ops | Quick prototypes, weak governance |
 
-He could:
-- Download LLaMA 2, set up GPUs, host a Flask API, worry about compliance…
-**Or just call Bedrock**:
-`InvokeModel(claude-v2)` → Bedrock runs it, bills the token usage, and returns the answer.
-No provisioning. No risk of leaking prompts. No GPUs to tune. Just results.
+## What gets tested
 
----
+- CloudTrail vs model invocation logging is the canonical distinction: CloudTrail logs the API call metadata and never the prompt or completion. Enabling model invocation logging is what captures the actual content, to CloudWatch, S3, or Firehose. Treat those logs as sensitive and lock them down.
+- Scope bedrock:InvokeModel per model ARN. Resource: * silently grants every model in the Region. Deny-by-default, least privilege.
+- Guardrails are only a control when enforced. Use the bedrock:GuardrailIdentifier IAM condition key, or the account-level enforced guardrail, so no code path can skip it. Guardrails filter harmful content, denied topics, and PII.
+- Data privacy: customer prompts, completions, and fine-tuning data are not used to train base models and are not shared with providers. A custom model is a private, KMS-encrypted copy.
+- Private access is not the default. The public endpoint is reachable from anywhere the IAM principal is valid. Interface VPC endpoints (PrivateLink) keep runtime and control-plane traffic off the internet.
+- The model is an untrusted component. A correctly authenticated principal can still send an adversarial prompt, and IAM cannot inspect the natural-language payload. Prompt injection is a data-layer problem, addressed by Guardrails and tight tool scoping, not by authentication.
 
-## Bedrock Architecture: Core Concepts
+## Limitations
 
-Bedrock’s architecture is modular — you mix and match models, data, and workflows.
-
-### 1. Foundation Models (FMs)
-
-You get access to multiple third-party and AWS-owned models via API:
-
-| Provider      | Models                                  |
-|---------------|------------------------------------------|
-| Anthropic     | Claude v1, v2, v3                        |
-| AI21 Labs     | Jurassic-2                               |
-| Meta          | LLaMA 2                                  |
-| Cohere        | Command R                                |
-| Stability AI  | Stable Diffusion XL                      |
-| Amazon        | Titan Text, Titan Embeddings, Titan Image (coming soon) |
-
-Each has a different:
-- Token limit
-- Latency
-- Specialization (code, image, summarization, chat)
-
-You pick the model based on your use case.
-
-### 2. Model Invocation
-
-You invoke a model with simple JSON over HTTPS (like calling a REST API). Example:
-
-```json
-{
-  "modelId": "anthropic.claude-v2",
-  "content": "Summarize this telecom outage log...",
-  "parameters": {
-    "temperature": 0.5,
-    "top_k": 100
-  }
-}
-```
-
-The result comes back with:
-- Response text
-- Token count
-- Cost (you’re billed per 1K tokens)
-
-### 3. Agents for Bedrock
-
-Bedrock now supports “agents” — dynamic AI workflows that can:
-- Use tools (like APIs, Lambda functions)
-- Interact with knowledge bases
-- Make decisions mid-conversation
-
-You define:
-- Agent prompt ("You're a billing assistant...")
-- Tools (Lambda functions, APIs, etc.)
-- Knowledge base (RAG via vector DB)
-
-Then the agent:
-- Interprets user input
-- Chooses what to do (e.g. retrieve data, call a tool, answer)
-- Continues the convo using new info
-
-This is how you go from just chatting → real automation.
-
-### 4. Retrieval-Augmented Generation (RAG)
-
-Bedrock supports knowledge bases to enrich models with your own data, using:
-- Vector embeddings via Titan Embeddings
-- Vector stores like OpenSearch, Pinecone, Redis, Knowledge Base for Bedrock
-- Document ingestion (PDF, DOCX, HTML, etc.)
-
-Bedrock enables RAG securely:
-**Embed → Store → Retrieve → Inject into prompt**
-No model retraining needed.
-
-### 5. Customization (Fine-Tuning vs Prompt Engineering)
-
-| Option              | Description                                      |
-|---------------------|--------------------------------------------------|
-| Prompt Engineering  | Use structured prompts/templates. No model changes. |
-| Knowledge Base (RAG)| Attach external knowledge, retrieved per query     |
-| Model Customization | Fine-tune Amazon Titan models with your data       |
-
-You can custom fine-tune Titan models for domain-specific behavior.
-
-
-## Snowy’s Architecture Flow Example
-
-Let’s say Snowy builds a telecom support AI:
-
-```text
-[User Input: “Why is my BGP circuit down?”]
-↓
-[Agent → Claude v3]
-↓
-[Knowledge Base (OpenSearch)]
-↓
-[Fetch last 24h outage logs from Zayo]
-↓
-[Call Lambda Function → Get ticket status]
-↓
-[Generate Summary → “Outage in Spokane region, ETA: 4:45PM”]
-↓
-[Return structured response to frontend]
-```
-
-Bedrock orchestrates:
-- Model
-- Data retrieval
-- Business logic
-- Agent memory + context
-
-No need to stitch together 6 AWS services manually.
-
----
-
-## Security and Compliance
-
-| Feature        | Detail                                                              |
-|----------------|----------------------------------------------------------------------|
-| Data Isolation | Your prompts, completions, and embeddings are never used to train models |
-| VPC Support    | Private link access — no internet-exposed calls                     |
-| IAM            | Granular access to specific model IDs, agents, knowledge bases      |
-| CloudTrail     | Logs all Bedrock API calls                                          |
-| KMS Integration| Encrypt data at rest (embeddings, knowledge base)                  |
-
-- Zero data leakage to public models
-- All inference is secure, auditable, and policy-bound
-
----
-
-## Pricing (Simplified)
-
-
-| Item             | Billing                                                       |
-|------------------|---------------------------------------------------------------|
-| Model Invocation | Per 1K input/output tokens (differs by model)                 |
-| Agents           | Billed per step (each tool call + model call = 1 step)        |
-| Knowledge Base   | Based on vector storage + retrieval count                     |
-| Customization    | Billed for training + storage (Titan only)                    |
-
-No cost for provisioning or idle time — you only pay when you invoke.
-
----
-
-## Real-Life Example: Snowy’s Bot
-
-Snowy builds a CloudSec AI Assistant:
-- Uses Claude v3 via Bedrock
-- RAG using S3 docs + Titan Embeddings
-- Agent calls a Lambda that pulls IAM policy JSON
-- Uses prompt engineering to compare policies
-- Returns: “This role allows wildcard IAM actions. Rotate and reduce scope.”
-
-He deploys it as an internal tool, running serverless, secure, and audited.
-
----
-
-## Final Thoughts
-
-Amazon Bedrock is AWS’s bet on secure, enterprise-scale GenAI.
-
-✔️ No GPU clusters
-✔️ No model management
-✔️ No compliance risk of public LLMs
-✔️ Pay-as-you-go
-✔️ Your data. Your models. Your logic.
-
-It’s especially powerful for:
-- Security-focused orgs
-- RAG-based assistants
-- Internal copilots
-- API-enhanced automation
-
-
-You’re not locked into one LLM. You can hot-swap between Claude, Titan, LLaMA, Cohere, etc., while keeping your IAM/KMS posture.
+- Almost every control is opt-in: private networking, guardrail enforcement, and content logging are off until you configure them.
+- IAM cannot see inside prompts or completions, so it cannot stop prompt injection or data exfiltration through the payload. That is Guardrails plus least-privilege tool design.
+- CloudTrail alone gives you no prompt or completion content. Without invocation logging you cannot reconstruct what was actually sent or returned.
+- The model roster and versions change constantly. Pin approved models by ARN rather than assuming the catalog is static.
+- Cost is per token (input and output), per agent step, and per Knowledge Base storage and retrieval. Heavy RAG or agent loops add up, and invocation logging adds storage cost.
+- Managed does not mean governed. Multi-account rollouts need SCPs, endpoint policies, and StackSets to keep every account consistent.

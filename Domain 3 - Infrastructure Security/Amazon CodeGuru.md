@@ -1,222 +1,51 @@
 # Amazon CodeGuru
 
-## What Is Amazon CodeGuru
+A machine-learning pair of developer tools: CodeGuru Reviewer, a static analyzer that reviews Java and Python in pull requests and repos, and CodeGuru Profiler, a runtime profiler that finds the most expensive methods in a running application. Reviewer is the security-relevant half. It uses ML and automated reasoning to trace data flow from source to sink and flag secrets, injection, unsafe deserialization, resource leaks, concurrency bugs, and insecure AWS SDK usage, mapped against the OWASP Top 10 and AWS internal best practices.
 
-Amazon CodeGuru is a machine learning-powered code reviewer and performance profiler for modern applications.
-It’s designed to help developers:
+For security work the thing to hold onto has two parts. First, Reviewer is the shift-left SAST answer: catch the vulnerability in the pull request, before it ships. Second, and more important as of 2026, Reviewer is legacy. It went into maintenance mode on November 7, 2025, with no new repository associations, and AWS now points teams to Amazon Inspector Code Security for repository scanning and Amazon Q Developer for code review. Know CodeGuru for what it did, and reach for Inspector Code Security as the current answer.
 
-- Automatically detect security issues
-- Spot code quality bugs
-- Suggest performance improvements
-- Reduce costs in production environments
-- Catch hard-to-spot issues in Java and Python
+## How it works
 
-**CodeGuru comes in two main parts:**
+CodeGuru Reviewer:
 
-| Component         | Purpose                                                                 |
-|------------------|-------------------------------------------------------------------------|
-| CodeGuru Reviewer | Reviews pull requests and static code (Java, Python) for security, correctness, best practices |
-| CodeGuru Profiler | Monitors live applications to identify hot paths, CPU bottlenecks, and cost optimization points |
+- **Trigger**: analyzes pull requests or full-repo scans on GitHub, GitHub Enterprise, Bitbucket, or CodeCommit (for associations that already exist). Findings post as line-level PR comments with a severity, an explanation, and a suggested fix.
+- **Engine**: ML plus automated reasoning, running data-flow analysis from source to sink across multiple functions to catch issues a line-by-line human review misses.
+- **Detects**: hardcoded secrets, SQL injection, unsafe deserialization, unvalidated input, resource leaks, race conditions, and inefficient or unsafe AWS SDK calls. OWASP Top 10 plus AWS best practices.
+- **Languages**: Java (most mature) and Python only.
 
-Think of it as your AI code security analyst and performance consultant, integrated into your Git and runtime workflows.
+CodeGuru Profiler:
 
----
+- **Agent**: a low-overhead agent runs inside your Java or Python app on EC2, ECS, EKS, or Lambda and streams data over TLS to the service.
+- **Collects**: stack traces and heap summaries only. It does not collect or store your source code.
+- **Produces**: flame graphs, hot-method call stacks, and cost-per-method estimates so you can cut CPU, latency, and spend. This is a performance and cost tool, not a security scanner.
 
-## Cybersecurity Analogy
+Security posture, both halves:
 
-Imagine you’re running a secure NOC backend. You’re constantly pushing code, but you don’t have time to review every PR line-by-line.
-**CodeGuru is like having a trained static analyzer with AWS security training reviewing your commits for:**
+- Least-privilege IAM roles gate who can create, read, or delete CodeGuru resources.
+- CloudTrail logs the API calls. Data is encrypted in transit and at rest and processed in-Region.
+- Customer source is not used to train the models, and Profiler never captures source at all.
 
-- Leaky credentials
-- Unvalidated inputs
-- Race conditions
-- Inefficient resource usage
-- Misused SDK calls
+## Amazon CodeGuru vs sibling options
 
-And in prod, **Profiler is like a performance penetration tester** constantly checking for:
+| | CodeGuru Reviewer | Inspector Code Security | Amazon Q Developer | CodeGuru Profiler |
+|---|---|---|---|---|
+| Analyzes | Source in PRs / repos | Code repos for vulnerabilities and deps | Code in IDE / repos | A running application |
+| Type | Static, ML plus automated reasoning | Static vuln and dependency scan | AI code review, secrets, deps | Dynamic performance profiling |
+| Status | Maintenance mode (Nov 2025) | Current | Current, in Kiro transition | Active |
+| Best for | Legacy SAST on Java / Python | The current code-security answer | Inline review before merge | CPU, latency, and cost hotspots |
 
-- CPU spikes
-- Memory leaks
-- Costly loops
-- Overloaded methods
+## What gets tested
 
-## Real-World Analogy
+- CodeGuru Reviewer is the ML-plus-automated-reasoning SAST answer for Java and Python: secrets, injection, resource leaks, concurrency, insecure AWS SDK usage, OWASP Top 10, caught in the pull request. But it is legacy: maintenance mode since November 7, 2025, no new repository associations.
+- The current successors are Amazon Inspector Code Security for repository vulnerability and dependency scanning and Amazon Q Developer for code review with static analysis and secrets detection. If a scenario asks for code security scanning today, lean Inspector Code Security.
+- CodeGuru Profiler is the performance and cost answer, not a security control: hot methods, CPU, latency, and cost per method from a running app. Its agent collects stack traces and heap summaries only, never source code.
+- Posture points that do get tested: least-privilege IAM roles, CloudTrail logging of API calls, encryption in transit and at rest, and in-Region processing.
+- Do not confuse Reviewer (static, pre-merge, source code) with Profiler (runtime, performance) or with GuardDuty and Inspector (runtime and infrastructure threat and vulnerability detection).
 
-Let’s say Snowy’s team deploys a Lambda that processes S3 objects and writes to DynamoDB. It works, but...
+## Limitations
 
-- One dev forgets to batch writes
-- Another puts secrets in a hardcoded string
-- Another uses `ObjectMapper` incorrectly for JSON parsing
-
-Rather than waiting for bugs in prod or a postmortem, CodeGuru Reviewer flags them in the PR:
-
-- _“Consider batching writes to reduce DynamoDB costs.”_
-- _“Avoid hardcoding secrets — use AWS Secrets Manager.”_
-- _“Unsafe deserialization in this method — potential security flaw.”_
-
-Meanwhile, Profiler finds that one loop is spiking CPU at 80% during peak usage, costing $400/month extra.
-
----
-
-## How CodeGuru Reviewer Works
-
-### Static Analysis with ML
-
-CodeGuru Reviewer uses trained ML models, built from thousands of internal and external codebases, to:
-
-- Identify anti-patterns
-- Recognize insecure or expensive SDK usage
-- Recommend refactoring and fixes
-
-It also includes **deterministic detectors** (e.g., credential scanning, thread safety, SQL injection patterns).
-
-You can use it in two ways:
-- On pull request (GitHub, CodeCommit, Bitbucket)
-- On full repo scan (via console or CLI)
-
-**Supported Languages:**
-
-- Java (most mature)
-- Python (security + maintainability rules only)
-
----
-
-### Types of Issues Detected
-
-| Category             | Examples                                                                 |
-|----------------------|--------------------------------------------------------------------------|
-| Security             | Credential leaks, SQL injection, unsafe deserialization, hardcoded secrets |
-| AWS SDK Best Practices | Inefficient `S3.listObjects()`, unbatched `DynamoDB.putItem()`            |
-| Resource Leaks       | Unclosed streams, memory bloat risks                                     |
-
-| Concurrency          | Race conditions, thread leaks                                            |
-| Code Quality         | Unused variables, nested try/catch blocks, exception swallowing          |
-
-Each finding includes:
-
-- Severity level
-- Explanation
-- Suggested fix
-- Link to docs or example
-
----
-
-## How CodeGuru Profiler Works
-
-CodeGuru Profiler helps you analyze live app performance in prod or test environments.
-
-### Key Capabilities:
-
-- Visualizes CPU usage over time
-- Pinpoints “hot methods” consuming the most resources
-- Flags redundant computation
-- Shows cost estimation per method
-
-You install an agent in your app (Java or Python), and it starts streaming profiling data to CodeGuru.
-It aggregates profiles across:
-
-- EC2
-- ECS
-- Lambda
-- EKS
-
-And gives you:
-
-- Flame graphs
-- Call stacks
-- Time-weighted performance snapshots
-- Cost attribution per function
-
----
-
-## Architecture Overview
-
-```plaintext
-[Code (GitHub / CodeCommit)]
-       ↓
-
-[Pull Request created]
-       ↓
-[CodeGuru Reviewer analyzes diff]
-
-       ↓
-[Findings added as PR comments]
-
-[Running App (Java/Python)]
-       ↓
-[Profiler Agent]
-       ↓
-[Amazon CodeGuru Profiler Backend]
-       ↓
-[Visual UI: flame graph, hotspots, cost estimates]
-```
-
----
-
-## Security and Governance
-
-| Concern         | CodeGuru Controls                                                                 |
-|----------------|-------------------------------------------------------------------------------------|
-| Code Privacy    | Reviewer does not retain code. Temporary use for static analysis only.            |
-| Network Access  | Profiler agents use TLS to send data to AWS backend                               |
-| IAM Controls    | Reviewer and Profiler require least-privilege roles                               |
-| Data Residency  | Code is processed in-region; logs and findings stored in your AWS account         |
-| Auditability    | Findings can be exported or queried; all actions logged in CloudTrail             |
-
-- You retain full control of source
-- No training on your proprietary code
-- Profiler supports VPC connectivity with PrivateLink
-
----
-
-## Pricing
-
-| Service   | Billing                                                       |
-|-----------|---------------------------------------------------------------|
-| Reviewer  | Per LoC reviewed: ~$0.75 per 100 LoC (free tier included)     |
-| Profiler  | Per sampling hour: ~$0.005 per app instance per hour          |
-
-- Cost scales with usage
-- Profiler is very low-overhead (single-digit MB RAM)
-- Savings usually outweigh cost (e.g., catching a $300/month waste)
-
----
-
-## Snowy’s Real-World Example
-
-Snowy’s team works on a data ingestion pipeline in Java.
-**Reviewer flagged this:**
-
-- `new FileInputStream()` not wrapped in try-with-resources → resource leak
-- `Thread.sleep()` in a Lambda → cost and performance issue
-- Secrets hardcoded in config → recommended using AWS Secrets Manager
-
-**Profiler found:**
-
-- A recursive `parseJson()` call was spiking CPU 50% of the time
-- Suggested switching to a streaming parser like Jackson Streaming API
-
-**Team saved:**
-
-- $250/month in EC2 CPU
-- Prevented a future incident involving leaked credentials
-- Shipped with confidence thanks to reviewer alerts
-
----
-
-## Final Thoughts
-
-Amazon CodeGuru is like hiring a security reviewer and performance analyst — on-demand, 24/7.
-
-✔️ Scales across large teams
-✔️ Reduces post-deploy bugs
-✔️ Improves security posture
-✔️ Lowers AWS costs
-✔️ Gives confidence in pull requests
-
-It’s especially valuable if:
-
-- You use Java or Python
-- You want real AWS-aware recommendations
-- You’re running performance-sensitive apps on EC2, Lambda, or EKS
-- You care about catching bugs before users do
+- Reviewer is in maintenance mode: no new repository associations since November 7, 2025, though existing associations still analyze. AWS steers new work to Q Developer and Inspector.
+- Java and Python only. Narrow language support.
+- Reviewer is pre-merge static analysis. It does not see runtime or infrastructure issues. Profiler is runtime performance, not a security scanner.
+- The successor tooling is itself churning: Amazon Q Developer IDE plugins reach end of support April 30, 2027 with AWS steering users to Kiro, though Q Developer in the AWS Console and first-party AWS experiences continue. Prefer Inspector Code Security as the durable security-scanning path.
+- Best value inside the AWS ecosystem, weaker outside AWS-native workflows.
