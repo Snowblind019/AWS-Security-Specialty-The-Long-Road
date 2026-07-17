@@ -1,170 +1,39 @@
 # Service-Linked Roles (SLRs)
 
-## What Is a Service-Linked Role
+A service-linked role is a special IAM role that an AWS service predefines and manages so it can act on your behalf inside your account. AWS owns the whole definition: the trust policy is locked to that one service's principal, the permissions come from an AWS-managed policy, and the name follows a fixed `AWSServiceRoleFor*` pattern. You can see it, list it, and audit it, but you cannot rewire its trust, and in most cases you cannot edit its permissions either. It typically appears automatically the first time you enable a feature that needs it. On the SCS exam the role matters because it is part of your IAM surface, it behaves differently from a role you create, and it has some governance quirks (notably that SCPs do not restrict it). The thing to hold onto: an SLR is a role the service owns and assumes itself, scoped and named by AWS, which you monitor rather than modify.
 
-A **Service-Linked Role (SLR)** is a special kind of IAM role that is **created and managed automatically by AWS services** — not by you.
+## How it works
 
-It allows AWS services to perform actions on your behalf within your account. But instead of telling customers to manually create IAM roles (which leads to misconfigurations), AWS **predefines the trust policy, permissions, and naming**.
+- **The trust policy is fixed to the service principal.** For example `elasticloadbalancing.amazonaws.com` with `sts:AssumeRole`, and you cannot edit it. Only that service can assume the role, which blocks it from being repurposed or abused by another principal.
+- **Permissions come from an AWS-managed policy.** You can view and audit what the role is allowed to do, but you generally cannot change it; AWS maintains the policy and updates it as the service evolves.
+- **Creation is usually automatic.** Enabling a feature often creates the SLR on first use, or you create it explicitly with `iam:CreateServiceLinkedRole`. Some services require the role to exist before the feature works.
+- **Naming is predictable.** `AWSServiceRoleForElasticLoadBalancing`, `AWSServiceRoleForAutoScaling`, and so on. The name and the trust principal tell you which service owns it.
+- **Deletion is guarded.** `iam:DeleteServiceLinkedRole` only succeeds when the service is no longer using it, AWS validates that asynchronously, and deleting one that is in use breaks the dependent feature.
 
-In short:
+## SLR vs service role vs regular role
 
-- The AWS service **creates the role for itself**
-- It **assumes the role automatically**
-- It uses that role to **interact with other AWS resources in your account**
-- You can **see the role, view the policy, and audit it**, but **you can't modify the trust policy**
+| Feature | Service-linked role | Service role (you create) | Regular IAM role |
+|---|---|---|---|
+| Created and owned by | The AWS service | You, then pass to a service | You |
+| Trust policy | Fixed to one service, not editable | You set it to the service principal | Fully customizable |
+| Permissions | AWS-managed, usually not editable | You define and edit | You define and edit |
+| Needs `iam:PassRole` | No, service assumes its own role | Yes, you pass it to the service | N/A |
+| Name | `AWSServiceRoleFor*` | Anything | Anything |
+| Lifecycle | Tied to the service | You manage | You manage |
 
-**Why this matters:**
-If you don’t understand SLRs, you risk:
+## What gets tested
 
-- Deleting or modifying roles that break production services
-- Failing to audit IAM correctly (thinking _“who created this?”_)
-- Missing delegated permissions during incident response
+- **AWS owns the SLR end to end.** Created, trust-locked, and permission-managed by the service. This is the answer when a scenario describes a role that appeared on its own with a fixed trust to a service principal.
+- **SLR versus a service role you create.** A service role (a Lambda execution role, an EC2 instance profile role) is one you build and hand to the service, which requires `iam:PassRole`. An SLR is owned by the service and needs no `PassRole`. The exam tests this distinction directly.
+- **SCPs do not restrict service-linked roles.** You cannot use an SCP guardrail to constrain what a service does through its SLR, which is a real governance gap and a favorite exam nuance. It ties back to the general rule that SCPs have carve-outs.
+- **Deleting an SLR can break production.** Because the feature depends on it, removal is validated and can disable logging, scaling, or certificate renewal. "Access logs stopped appearing" often traces to a deleted SLR.
+- **You audit, not author.** Since you cannot edit the trust and usually cannot edit the permissions, the security work is monitoring creation and deletion in CloudTrail (`CreateServiceLinkedRole`, `DeleteServiceLinkedRole`) and periodically reviewing what the role can touch, including with Access Analyzer.
 
----
+## Limitations
 
-## Cybersecurity Analogy
-
-Imagine your data center has an outsourced HVAC system.
-You gave the HVAC company their own secure keycard, but instead of letting them go anywhere, you install a **contractor-only elevator**.
-
-That elevator is a **Service-Linked Role**:
-
-- It's locked to just that vendor
-- You know when it’s used
-- You can’t rewire it or give it to someone else
-- But if you remove it, the whole system stops working
-
-## Real-World Analogy
-
-Picture **Winterday** deploying **Elastic Load Balancing (ELB)**.
-
-When he enables **access logging**, ELB needs permission to write logs to S3. But instead of telling him to create an IAM role and paste in a policy, AWS automatically spins up:
-
-```bash
-aws iam create-service-linked-role \
-  --aws-service-name elasticloadbalancing.amazonaws.com
-```
-
-Each AWS service that supports SLRs has a **specific service name** and a **fixed trust policy**.
-
----
-
-## 1. Trust Relationship
-
-You **can’t edit this**. It’s locked to a specific service. Example:
-
-```json
-{
-  "Effect": "Allow",
-  "Principal": {
-    "Service": "elasticloadbalancing.amazonaws.com"
-  },
-  "Action": "sts:AssumeRole"
-}
-```
-
-This prevents lateral movement or abuse — **only ELB can assume this role**.
-
-## 2. Permissions Policy
-
-This is where the actual actions are defined. For example:
-
-- `s3:PutObject` into a logging bucket
-- `acm:RenewCertificate` for managed certs
-- `cloudwatch:PutMetricData` for telemetry
-
-You can **see and audit this policy** — and this is where you control the scope of what AWS services can do.
-
----
-
-## Visibility and Lifecycle
-
-- SLRs are **tagged** with `aws:servicename`
-- You can use the **IAM Console**, **CLI**, or **Access Analyzer** to list them
-- They are **named predictably**, for example:
-  - `AWSServiceRoleForElasticLoadBalancing`
-  - `AWSServiceRoleForAutoScaling`
-  - `AWSServiceRoleForEC2Spot`
-
-**To delete:**
-
-```bash
-aws iam delete-service-linked-role --role-name AWSServiceRoleForElasticLoadBalancing
-```
-
-> **But be warned** — the service may break if you do this.
-
----
-
-## Use Cases and Detection Implications
-
-| **Use Case**                   | **Service Using SLR**                   | **Permissions Used**                                      |
-|--------------------------------|-----------------------------------------|------------------------------------------------------------|
-| ELB Access Logging             | `elasticloadbalancing.amazonaws.com`    | `s3:PutObject` to log bucket                               |
-| Auto Scaling lifecycle hooks   | `autoscaling.amazonaws.com`             | `sns:Publish`, `sqs:SendMessage`, etc.                     |
-| CloudWatch Agent on EC2        | `ec2.amazonaws.com` via SSM-managed     | `cloudwatch:PutMetricData`, `logs:PutLogEvents`           |
-| ACM Certificate Renewal        | `acm.amazonaws.com`                     | `acm:RenewCertificate`, `iam:GetServerCertificate`         |
-| ECS Task Telemetry (ECS Exec) | `ecs.amazonaws.com`                     | `ssm:StartSession`, `logs:CreateLogStream`, etc.          |
-
-These roles often have **cloud-impacting powers**, so during incident response, knowing how they work can help answer:
-
-- “Was this role abused?”
-- “Did this role access S3 unexpectedly?”
-- “Which service owns this permission chain?”
-
----
-
-## SLRs vs Regular IAM Roles
-
-| **Feature**             | **Service-Linked Role**      | **Regular IAM Role**               |
-|-------------------------|------------------------------|-------------------------------------|
-| **Created by**          | AWS service                  | You                                 |
-| **Trust Policy**        | Fixed, service-specific      | Fully customizable                  |
-| **Use Case**            | AWS service automation       | General-purpose delegation          |
-| **Name Prefix**         | `AWSServiceRoleFor*`         | Anything you define                 |
-| **Lifecycle Tied To**   | The AWS service              | Manual                              |
-| **Modifiable?**         | Only permission policy       | Yes (both trust + permission)       |
-
----
-
-## Real-Life Snowy Scenario
-
-You're investigating why **ALB access logs** suddenly stopped showing up in S3.
-
-You trace the service path:
-
-- ALB → S3 → no logs
-- IAM logs show the role `AWSServiceRoleForElasticLoadBalancing` no longer exists.
-- Someone from the infra team deleted it thinking it was unused.
-
-You use:
-
-```bash
-aws iam create-service-linked-role \
-  --aws-service-name elasticloadbalancing.amazonaws.com
-```
-
-...to restore it.
-
-Now logging resumes.
-**Lesson learned:** SLRs aren’t optional metadata — they’re critical control paths.
-
----
-
-## Final Thoughts
-
-**Service-Linked Roles are invisible glue.**
-They connect AWS services to each other **safely** by wrapping the **trust boundary around a fixed principal**.
-
-You **can't customize** how the service authenticates — and that’s the point. It **prevents abuse**.
-
-But just because you didn’t create them doesn’t mean you shouldn’t monitor them.
-
-For CloudSec, that means:
-
-- Monitor **creation and deletion** via **CloudTrail**
-- Review **permissions attached** to SLRs **periodically**
-- Use **Access Analyzer** to see what resources these roles touch
-- Don’t **manually modify or delete** unless you know the impact
-
-> SLRs are part of your **IAM surface area** — treat them like **semi-autonomous agents with scoped power**.
+- **Minimal customer control.** The trust policy is not editable and the permissions are AWS-managed, so you cannot tighten or repurpose an SLR the way you can a role you own.
+- **Deletion is blocked while in use and breaks the feature.** It is not safe to remove an SLR you think is unused without confirming no service depends on it.
+- **SCP guardrails miss them.** Because SCPs do not apply to SLRs, org-wide guardrails cannot bound the actions a service takes via its service-linked role.
+- **One service only.** An SLR cannot be reused for anything else; it is bound to the single service that owns it.
+- **Not universally supported.** Services that do not offer an SLR use a regular service role you create and manage instead, so the pattern is not consistent across every service.
+- **Source-note correction.** SLR permissions are AWS-managed, not customer-tuned; the earlier framing that "this is where you control the scope of what AWS services can do" is not accurate for SLRs. You review and audit that policy; you do not generally set it.

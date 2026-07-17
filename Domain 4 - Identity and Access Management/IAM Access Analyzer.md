@@ -1,190 +1,39 @@
-# AWS IAM Access Analyzer  
+# IAM Access Analyzer
 
----
+IAM Access Analyzer uses automated reasoning, AWS's provable-security engine (Zelkova), to tell you what access your policies make possible, not what has been used. It mathematically evaluates resource and identity policies against a defined zone of trust and reports any path by which a resource could be reached from outside that zone: publicly, cross-account, or through federation. Because it reasons over policy logic rather than logs, it needs no past activity to reach a conclusion with certainty. Over time the service grew beyond that original external-access job to also flag unused access, validate policies as you write them, and run custom access checks in a pipeline. On the SCS exam it is the proactive, policy-intent counterpart to the reactive tools, and the constant trap is confusing it with Access Advisor. The thing to hold onto: Access Analyzer answers "what could be accessed from outside my trust boundary," using math over policies, before anyone tries.
 
-## What Is The Service
+## How it works
 
-**IAM Access Analyzer** is a built-in tool within **AWS Identity and Access Management (IAM)** that helps detect resources in your AWS environment that are accessible **from outside your account** — whether publicly, cross-account, cross-service, or via federation.
+- **You create an analyzer with a zone of trust.** An account-level analyzer treats the account as trusted; an organization-level analyzer treats the whole org as trusted. Findings describe access from outside that boundary.
+- **It monitors supported resource policies continuously.** A policy change triggers re-evaluation, and any external access it proves possible becomes a finding.
+- **Automated reasoning does the work.** Zelkova evaluates every possible access path implied by the policy, so the result is "this is reachable," not "this was reached." No logs are involved.
+- **You resolve each finding three ways:** fix the policy, archive it if the access is intentional (archive rules can auto-archive known-good patterns), or automate a response by routing findings to EventBridge and Security Hub.
+- **Supported resources include** S3 buckets, IAM role trust policies, KMS keys, Lambda functions, SQS queues, SNS topics, Secrets Manager secrets, and a growing list of others. Unsupported resource types are simply not analyzed.
 
-It uses **automated reasoning** powered by the **Zelkova engine**, which performs logic-based analysis to **mathematically evaluate access paths**. This means it doesn't need logs, past activity, or user behavior — it tells you with certainty *what access is possible based solely on policy configurations.*
+## The four things Access Analyzer does
 
-Why it matters: In sprawling AWS environments with complex bucket policies, KMS key permissions, and trust relationships, it's dangerously easy to create accidental exposure. IAM Access Analyzer proactively finds those before someone exploits them.
+| Capability | What it answers | Notes |
+|---|---|---|
+| External access findings | Can this resource be reached from outside my zone of trust (public, cross-account, federated) | The original feature; free |
+| Unused access findings | Which roles, permissions, and credentials have gone unused | Least-privilege feature; priced per analyzed resource |
+| Policy validation | Does this policy have errors, or violate best practices, as I author it | `ValidatePolicy`, used in the policy-writing loop |
+| Custom policy checks | Does this policy grant more than a baseline, or grant a specific action | `CheckNoNewAccess`, `CheckAccessNotGranted`, for CI/CD gates |
 
----
+## What gets tested
 
-## Cybersecurity and Real-World Analogy
+- **Access Analyzer is proactive and policy-based.** It reports what access is possible from configuration alone, which is the answer whenever a scenario wants to find unintended exposure before it is exploited. Contrast it with GuardDuty and CloudTrail, which react to activity that already happened.
+- **Do not confuse it with Access Advisor.** Access Advisor shows what services an identity has used (usage history, for trimming). Access Analyzer shows what access a policy makes possible (reachability, for exposure). This swap is the classic exam trap.
+- **Zone of trust defines the boundary.** An org-level analyzer treats cross-account access within the organization as trusted and only flags access from outside the org. An account-level analyzer flags cross-account access to other accounts, even ones in the same org.
+- **Know the external finding types:** public (`Principal: "*"`), cross-account, and federated. A bucket or KMS key readable by an outside account or the internet is the canonical finding.
+- **Unused access findings are the newer least-privilege angle.** Unused roles, unused permissions, and stale credentials surface here, and this is where the exam now overlaps Access Analyzer with least privilege. Remember it is the paid analyzer.
+- **Custom policy checks belong in pipelines.** `CheckNoNewAccess` (does a proposed policy grant more than the current one) and `CheckAccessNotGranted` (does a policy grant a named action) are the automated-reasoning gates for CI/CD, and they are the answer for "block risky policy changes before deploy."
+- **Remediation uses conditions.** Scoping with `aws:PrincipalOrgID` or `aws:SourceIp`, and archiving intentional exposures, are the expected fixes for external findings.
 
-**Cybersecurity Analogy:**  
-Imagine you’re managing a massive cloud data center with thousands of doors (resources), each secured by locks (policies). Some doors might be unlocked or shared without your knowledge. IAM Access Analyzer is like a drone that flies through the facility, checking every lock, and says:  
-> “This door can be opened by this external party.”  
+## Limitations
 
-No brute-force. No breach required. It just *knows*, based on the logic of the lock.
-
-**Real-World Analogy:**  
-It’s like hiring a contract lawyer to audit every agreement (IAM, trust, bucket policies). Instead of waiting for a legal issue to arise, the lawyer reads every clause and warns you:  
-> “This paragraph allows this external vendor to access your sensitive data.”  
-
-It’s a **proactive audit**, not a reactive log search.
-
----
-
-## Key Capabilities
-
-| Capability               | Description                                                                 |
-|--------------------------|-----------------------------------------------------------------------------|
-| **Automated Reasoning**  | Uses math/logic (Zelkova) to evaluate IAM and resource policies             |
-| **Find External Access** | Detects if a resource is exposed to another AWS account or public internet  |
-| **Find Public Access**   | Flags resources accessible to everyone (`Principal: "*"`)                   |
-| **Policy Validation**    | Identifies overly permissive or conflicting policy statements               |
-| **Multi-Account Support**| Can scan across all AWS Organization accounts                               |
-| **Custom Analyzers**     | Scopes can be region/account/resource-specific                              |
-
----
-
-## How It Works
-
-IAM Access Analyzer works by **creating analyzers** that scan your environment for **possible access paths**.
-
-### Analyzer Scope Options:
-- **Account-level** (default)
-- **Organization-level** (cross-account visibility)
-- **Region-specific**
-
-Once an analyzer is created, it continuously monitors supported resources for policy changes. Any detected **external access** is reported as a **finding**.
-
-### Types of Access It Detects:
-
-- **Public access** (`Principal: "*"` in any policy)
-- **Cross-account access** (AWS account IDs outside your own)
-- **Cross-service access** (e.g., Lambda or CloudWatch from another account)
-- **Federated access** (e.g., SAML or OIDC identity providers)
-
----
-
-## Resources It Analyzes
-
-| Resource Type                 | Policy Type Evaluated                    |
-|------------------------------|------------------------------------------|
-| **S3 Buckets**               | Bucket policies                          |
-| **IAM Roles**                | Trust policies (`AssumeRole`)            |
-| **KMS Keys**                 | Key policies                             |
-| **Secrets Manager Secrets**  | Resource policies                        |
-| **SQS Queues**               | Resource policies                        |
-| **SNS Topics**               | Resource policies                        |
-| **Lambda Functions**         | Resource policies                        |
-
----
-
-## Findings Example
-
-Imagine a bucket policy like this:
-
-```json
-{
-  "Effect": "Allow",
-  "Principal": "*",
-  "Action": "s3:GetObject",
-  "Resource": "arn:aws:s3:::my-bucket/*"
-}
-```
-
-Even if you didn’t know this was in place, Access Analyzer would generate a finding like:
-
-> **Resource** `arn:aws:s3:::my-bucket` **is accessible by anyone on the internet using** `s3:GetObject`.
-
-You can then choose to:
-- **Fix** the policy  
-- **Archive** the finding (if intentional)  
-- **Automate** remediation steps via EventBridge
-
----
-
-## Types of Findings
-
-| Finding Type       | Meaning                                                                 |
-|--------------------|-------------------------------------------------------------------------|
-| **Public Access**   | Resource is accessible to *everyone* (no auth required)                 |
-| **Cross-Account**   | Another AWS account can access the resource                             |
-| **Cross-Service**   | Another AWS service/account combo can interact with it                  |
-| **Federated Access**| An external SAML/OIDC user can access via assumed role or direct access |
-
----
-
-## Using Access Analyzer in Practice
-
-### **1. Create an Analyzer**
-- Via Console, CLI, or Terraform  
-- Choose scope: **Account** or **Organization**  
-- Region-specific
-
-### **2. Review Findings**
-- Findings are displayed in the console  
-- Can be filtered, searched, exported  
-- You decide whether to fix, archive, or automate
-
-### **3. Take Action**
-- Tighten permissions (`aws:SourceIp`, `aws:PrincipalOrgID`, etc.)  
-- Remove unnecessary cross-account access  
-- Validate assumptions in trust policies  
-- Archive known/intentional exposures
-
-### **4. Automate Responses**
-- Send findings to **Amazon EventBridge**  
-- Trigger a **Lambda** function to:
-  - Notify security teams  
-  - Auto-remove risky policy elements  
-- Integrate with **AWS Security Hub**
-
----
-
-## Example Security Use Cases
-
-### **1. Prevent Public S3 Buckets**
-- Catch `"Principal": "*"` before a customer or attacker finds it
-
-### **2. Validate IAM Trust Relationships**
-- Detect `AssumeRole` policies that allow access from unknown accounts
-
-### **3. Detect Data Exfil Risks**
-- Catch if **Secrets Manager** secrets or **KMS keys** are readable by test/dev accounts
-
-### **4. Design Validation**
-- Enforce internal-only access with conditions like:
-```json
-"Condition": {
-  "StringEquals": {
-    "aws:PrincipalOrgID": "o-abc123"
-  }
-}
-```
-
-### **5. Least Privilege**
-- Spot policies that are *too broad* for the workload (e.g., all actions on all resources)
-
----
-
-## Pricing
-
-IAM Access Analyzer is **free** to use.
-
-| Feature                | Cost              |
-|------------------------|-------------------|
-| Creating analyzers     | **Free**          |
-| Running analysis       | **Free**          |
-| Storing findings       | **Free**          |
-| EventBridge/Lambda use | Pay per service   |
-
-You only pay for **optional** services triggered in response to findings.
-
----
-
-## Final Thoughts
-
-**IAM Access Analyzer** is your **proactive lens** into IAM exposure — surfacing **what *could* happen**, not what already did.  
-
-Other tools like **GuardDuty** and **CloudTrail** react to activity. Access Analyzer looks at **policy intent** and tells you:  
-> “This configuration allows external access — even if no one’s used it yet.”
-
-In a complex AWS Org with cross-account Lambdas, vendor access, dev/test environments, and evolving policies — this visibility is *invaluable*.
-
-It’s like **X-ray vision** for your security team. You get to **see through the policies** and identify risks before they become incidents.
+- **It proves possibility, not use.** A finding says access is reachable, not that anyone used it. Whether it was ever exercised or abused is a CloudTrail and GuardDuty question.
+- **Supported resource types are finite.** The list is growing but bounded; a resource type not on it is not evaluated, so absence of findings is not proof of no exposure.
+- **The zone of trust can hide intra-org risk.** An org-level analyzer will not flag unintended access between two accounts inside the org, because that access is within the trusted zone by definition.
+- **Not entirely free.** External access findings, policy validation, and custom policy checks are free, but unused access analysis is billed per IAM role or user analyzed. The source's blanket "free" is only partly right.
+- **Analyzers are regional.** External access analyzers operate per region, so coverage means creating them in each region you use.
+- **No runtime context.** It reasons over policies, not sessions, so it does not tell you about tags, request conditions at call time, or which principal actually connected.

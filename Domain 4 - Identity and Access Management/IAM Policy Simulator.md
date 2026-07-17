@@ -1,164 +1,41 @@
-# IAM Policy Simulator  
+# IAM Policies: Inline vs AWS Managed vs Customer-Managed
 
-## What Is the Service
+These are the three flavors of identity-based policy, the JSON permission documents you attach to users, roles, and groups. They differ not in how IAM evaluates them, which is identical, but in who owns them, how they are stored, whether they can be reused and versioned, and how visible they are to auditing. AWS managed policies are authored and updated by AWS. Customer-managed policies are standalone objects you write and own. Inline policies are embedded directly into a single identity with no independent existence. On the SCS exam the type you pick drives blast radius, least-privilege quality, and detectability, and the recurring guidance is to default to customer-managed for anything real. The thing to hold onto: same evaluation, very different lifecycle and governance, and inline is the one that quietly becomes a shadow permission.
 
-The IAM Policy Simulator is a tool provided by AWS that allows you to test and validate what an identity can or cannot do, before or after permissions are applied.  
-It lets you simulate real-world API calls (like `s3:GetObject`, `ec2:DescribeInstances`, `kms:Decrypt`, etc.) for any IAM user, group, or role — and tells you whether that action would be allowed or denied given the current policies attached.
+## How it works
 
-It doesn’t actually perform the action — it just evaluates the logic and conditions of:
+- **All three share the same structure** of `Statement`, `Effect`, `Action`, `Resource`, and optional `Condition`, and all go through the same policy evaluation. The type never changes an allow or deny.
+- **AWS managed policies** are authored by AWS, cannot be edited, are shared across every AWS customer, and are updated by AWS on their own schedule. They are convenient starting points and some service-linked roles require them, but they tend to be broad.
+- **Customer-managed policies** are standalone objects in your account with their own ARN. You attach them to many identities, keep up to five stored versions with a settable default and rollback, and manage them through IaC and CI/CD. They appear in policy listings and in Access Analyzer.
+- **Inline policies** are embedded one-to-one in a single user, role, or group. They have no separate ARN, are not reusable, carry no version history, are deleted automatically when the identity is deleted, and do not appear in the managed-policy list.
+- **Quotas differ.** Managed policies cap at a document size and five versions, with a default limit on how many attach to one principal; inline policies have their own per-identity size limits and no versioning.
 
-- Identity-based policies (AWS Managed, Customer-Managed, Inline)  
-- Resource-based policies (like S3 bucket policies)  
-- SCPs (Service Control Policies from AWS Organizations)  
-- Permission boundaries  
-- Session policies  
+## Comparison
 
-In short, it’s like a policy debugger for IAM, and it can help pinpoint why something is broken, why it’s over-permissive, or how to tighten things down safely without breaking apps or people.
+| Dimension | AWS managed | Customer-managed | Inline |
+|---|---|---|---|
+| Owner | AWS | You | You, bound to one identity |
+| Editable | No | Yes | Yes |
+| Reusable across identities | Yes | Yes | No, one-to-one |
+| Versioning / rollback | AWS-controlled | Yes, up to 5 versions | None |
+| Listed in policy namespace | Yes | Yes | No, only on the identity |
+| Lifecycle | Updated by AWS silently | You manage | Deleted with the identity |
+| Best fit | Quick starts, some service-linked roles | Production least privilege, governance | Strict one-to-one that must die with the identity |
 
----
+## What gets tested
 
-## Cybersecurity Analogy
+- **Customer-managed is the recommended default.** Reusable, versioned, auditable, and IaC-friendly, it is the answer for production least-privilege and governance scenarios.
+- **AWS managed trades control for convenience.** AWS can broaden a managed policy without your review, so a role can silently gain permissions over time. They are often over-broad and cannot be scoped with your own tags or conditions unless wrapped by a permissions boundary or SCP. Fine for quick starts, risky as your production least-privilege layer. Note some service-linked roles mandate a specific AWS managed policy.
+- **Inline means a lifecycle-bound one-to-one relationship.** It is the choice when a permission must exist only on one identity and disappear when that identity is deleted, such as break-glass or a tightly scoped exception. The cost is that it is invisible in policy lists and easy to orphan, so it is a poor fit at scale.
+- **Only managed policies version.** Up to five versions with a default and rollback for customer-managed; inline has no version history at all. Questions about auditing "who changed this policy and when" favor managed.
+- **Know the policy categories, not just these three.** These are identity-based policies. Resource-based policies (bucket, key policies) carry a `Principal` and attach to the resource; permissions boundaries cap the maximum permissions an identity can have without granting anything; SCPs and RCPs are org-wide guardrails. The exam mixes these and expects you to place each correctly.
+- **Detection favors managed.** Customer-managed and AWS managed policies surface in `list-policies`, Access Analyzer, and Security Hub rollups; inline can be missed, which is a governance blind spot.
 
-Think of the IAM Policy Simulator like a sandboxed attack simulation — but instead of simulating malware or lateral movement, you’re simulating permissions boundaries and API access.  
+## Limitations
 
-It's your security lab test bench:
-
-- What would happen if Blizzard assumes this role and tries to call `kms:Decrypt` on key XYZ?  
-- Will Winterday’s Lambda be able to put logs in this S3 bucket if SCPs are applied?  
-- Would this deny statement actually block that API if it’s called via an STS session?
-
-## Real-World Analogy
-
-Imagine your physical data center:  
-Someone asks, “Can Nathan swipe his badge and get into the NOC?”  
-
-Instead of testing it in real life and triggering an alarm, you check the building access simulator, where it runs through:
-
-- His badge permissions  
-- The door’s rules  
-- Whether the access control override from yesterday still applies  
-- The visitor policy his badge was inherited from  
-
-Now replace the badge with an IAM role and the door with `s3:PutObject` — that’s what the simulator does.
-
----
-
-## How It Works
-
-When you run a simulation, it does a full logical evaluation of all the applicable policies, scoped to:
-
-- The IAM entity (user, group, or role)  
-- The action(s) you’re simulating (e.g., `ec2:StartInstances`, `s3:GetObject`)  
-- The resource(s) you’re targeting (e.g., an S3 bucket ARN)  
-- Optional condition keys, tags, or contexts  
-
-It will evaluate:
-
-- All attached identity policies  
-- Any inline policies on that identity  
-- SCPs from your organization (if applicable)  
-- Permission boundaries (if any)  
-- Resource-based policies (if included)  
-- Session policies (if applicable)  
-
-Then it gives you a simple Allowed / Denied verdict — and if denied, why (e.g., due to boundary or SCP).
-
----
-
-## Where to Use It
-
-### AWS Console UI  
-- Navigate to the **IAM → Policy Simulator**  
-- Choose an identity or paste in a policy, choose actions/services, and run simulations.
-
-### AWS CLI / API  
-- Useful for automation or testing in CI/CD pipelines. Example:
-
-```bash
-aws iam simulate-principal-policy \
-  --policy-source-arn arn:aws:iam::111122223333:role/SnowySecurityAnalyst \
-  --action-names s3:ListBucket \
-  --resource-arns arn:aws:s3:::snowy-logs-bucket
-```
-
----
-
-## Policy Simulator Does Not Do
-
-This is critical — the simulator is not perfect. It does not simulate real-time external conditions:
-
-- It does not check if the resource exists  
-- It does not validate conditions that depend on live external context (e.g., IP restrictions unless provided manually)  
-- It does not simulate MFA requirements unless explicitly passed in  
-- It does not simulate session duration or federated identities unless you pass those session details  
-
-You still need real-world testing in staging for high-trust environments — but this gets you 90% of the way there.
-
----
-
-## Use Cases in a Detection/Architecture Context
-
-- **Why was this action denied?**  
-  Simulate and find out whether SCPs, permission boundaries, or resource policies caused it.
-
-- **Will this new policy allow unintended access?**  
-  Before deploying a new CustomerManagedPolicy, test it across sensitive actions like `kms:Decrypt` or `iam:PassRole`.
-
-- **Testing ABAC setups**  
-  Simulate conditions like `aws:ResourceTag` or `aws:RequestTag` to verify that only tagged resources are accessible.
-
-- **Audit Least Privilege**  
-  Pair this with Access Analyzer to simulate what actions are actually possible vs. what is defined on paper.
-
-- **Break Glass Testing**  
-  Validate that emergency roles (e.g., `SecurityIncidentResponder`) don’t have access to billing or RDS in normal operations.
-
----
-
-## Limitations Table
-
-| Capability                            | Supported in Simulator?          |
-|---------------------------------------|----------------------------------|
-| Identity-based policies               | Yes                              |
-| Resource-based policies (S3, etc.)    | Yes                              |
-| SCPs                                  | Yes                              |
-| Permission Boundaries                 | Yes                              |
-| Session Policies                      | Yes                              |
-| MFA Context Simulation                | Only if manually added           |
-| Dynamic Conditions (e.g. external IP) | Only with manual context         |
-| Checks resource existence             | No                               |
-| Simulates real API response           | No (only policy logic)           |
-
----
-
-## Real-Life Snowy Scenario
-
-Blizzard’s team rolls out a new `DataExportLambda` that reads from S3 and writes to a Redshift cluster.  
-But when it runs, it fails on `s3:GetObject`. Logs say **AccessDenied**.
-
-Instead of poking in the dark:
-
-- Snowy uses the IAM Policy Simulator  
-- Loads the Lambda execution role ARN  
-- Simulates `s3:GetObject` on the specific bucket ARN  
-- Finds that a **permission boundary** is denying access  
-
-Boom — problem solved before it goes to Prod.
-
----
-
-## Final Thoughts
-
-In AWS, access logic is layered and complex. You can have permissions that look valid but fail because of SCPs, session policies, or missing tags.  
-
-The IAM Policy Simulator is your best friend for:
-
-- Debugging access failures  
-- Validating least privilege before rollout  
-- Verifying assumptions before red teaming or incident response  
-
-It’s not a silver bullet — but it’s the first place you should check when someone says  
-**“I don’t have access”** or **“This policy should work.”**  
-
-> You can’t fix what you can’t see — and this lets you see the exact decision path.
-
+- **AWS managed policies drift outside your control.** You cannot pin a version, edit the content, or prevent AWS from adding permissions, and you cannot constrain them with your own conditions directly.
+- **Inline policies resist auditing.** No versioning, no reuse, absent from managed-policy listings, and easy to lose track of when identities change, which is exactly how shadow permissions form.
+- **Customer-managed still needs lifecycle work.** The five-version cap means you must delete old versions before adding new ones, and over-attaching one policy spreads privilege creep.
+- **Managed policy limits apply.** Document size, the five-version ceiling, and the default cap on policies attached per principal all constrain large designs.
+- **None of these are org guardrails.** They grant or scope at the identity level only. Capping permissions across an account or organization requires permissions boundaries and SCPs, not a choice among these three types.
+- **Source-note correction.** PowerUserAccess is not "everything except IAM and billing"; it allows most services while denying IAM, Organizations, and account management actions. And AWS managed policies do have versions, AWS just controls them, so "no version control" means no control by you, not the absence of versions.

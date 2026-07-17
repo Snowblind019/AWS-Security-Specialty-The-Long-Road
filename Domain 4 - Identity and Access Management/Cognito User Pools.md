@@ -1,171 +1,42 @@
 # Amazon Cognito User Pools
 
-## What Is Cognito User Pools 
+A user pool is a fully managed identity directory that handles authentication for web and mobile apps. It does sign-up, sign-in, password resets, MFA, email and phone verification, attribute storage, and federation to SAML, OIDC, and social providers, and on a successful login it issues three JWTs. It replaces building your own login system or leaning on a third-party SaaS, and it plugs into API Gateway, ALB, and AppSync as a token issuer and authorizer. This is the authentication half of Cognito: it proves who a user is and hands back tokens. On the SCS exam the recurring theme is that the pool is only as secure as its configuration, and the tested details cluster around tokens, MFA, federation, and where claims can and cannot be trusted. The thing to hold onto: a user pool authenticates users and issues JWTs; app clients define how each app gets those tokens, and an identity pool is what later trades a token for AWS credentials.
 
-Amazon Cognito User Pools is a **fully managed identity directory** in AWS that lets you securely sign up, sign in, and manage users for web and mobile applications.
+## How it works
 
-Think of it as your application’s **auth system-as-a-service** — one that handles:
+- **The pool stores identities and attributes** and owns the account lifecycle: registration, login, password reset, password policy, and email/SMS verification.
+- **App clients are the per-app front doors.** Each represents one application, carries its own token settings, and is public (no secret) or confidential (with secret).
+- **A successful login yields three JWTs.** The ID token carries identity claims, the access token carries scopes and groups for authorizing API calls, and the refresh token mints new ID and access tokens without re-login.
+- **The Hosted UI is an optional AWS-hosted login page** supporting OAuth2 flows, attachable to a custom domain and brandable, but public-facing by default.
+- **Lambda triggers hook the lifecycle:** Pre Sign-up (block banned domains), Post Confirmation (welcome flows), Pre Token Generation (inject custom claims and scopes), and Post Authentication (log sign-ins).
+- **Federation links external identities to a pool user.** SAML 2.0, OIDC, and social logins are supported, and each federated identity is tied to a Cognito user through a shared identifier.
 
-- User registration and login  
-- Password resets and multi-factor authentication (MFA)  
-- OAuth 2.0, SAML, OpenID Connect integrations  
-- Token issuance (ID token, access token, refresh token)  
-- Attribute storage (email, phone, custom fields)  
-- Account confirmation flows  
-- Email and SMS verifications  
+## The three tokens
 
-It’s a modern identity system that speaks **JWT**, understands **federated identity**, and is **secure by default** — but only if you configure it properly.
+| Token | Purpose | Exam-relevant note |
+|---|---|---|
+| ID token | Identity and profile claims (OIDC) | Do not use it to authorize API calls; it describes the user, it is not an access grant |
+| Access token | Authorizing API/resource calls; carries scopes and `cognito:groups` | This is what a backend or API Gateway authorizer should validate for authorization |
+| Refresh token | Obtain new ID and access tokens without re-authenticating | Long lifetimes equal long sessions; default 30 days, configurable up to 10 years |
 
-Why it matters: you no longer have to build your own login system from scratch or rely on third-party *SaaS* like Auth0. You can host your own secure, scalable identity *backend* inside AWS — integrated with **IAM**, API Gateway, **AppSync**, and more.
+## What gets tested
 
----
+- **User pool is authentication; identity pool is authorization to AWS.** The pool issues JWTs and proves identity. It does not, by itself, grant access to S3 or DynamoDB. That requires an identity pool exchanging the token for STS credentials.
+- **Use the right token.** The access token authorizes API calls via scopes and groups; the ID token is for identity claims only. Authorizing an API off the ID token is a planted mistake.
+- **Prefer TOTP over SMS MFA.** SMS is vulnerable to SIM-swap and carries per-message SNS cost that can spike if enabled globally without geo limits. TOTP (authenticator app) is the stronger, cheaper answer. Advanced security features add compromised-credential detection and adaptive/risk-based auth.
+- **`cognito:groups` are labels, not IAM roles.** Groups are arbitrary strings. They only translate to AWS permissions through identity-pool role mapping or explicit backend logic, never automatically.
+- **Pre Token Generation is how you add claims.** Custom scopes, tenant IDs, and session flags are injected there, which is the answer for scenarios needing extra authorization context in the token.
+- **Tokens are not revocable by default.** A JWT stays valid until it expires. The token revocation feature invalidates refresh tokens only; access and ID tokens live out their TTL. Short access-token lifetimes are the control for sensitive apps.
+- **Custom attributes are plaintext in the ID token.** Never store secrets in them; anyone holding the token can read them.
+- **The Hosted UI is a public surface.** Loose callback URLs and broad OAuth scopes turn it into an open-redirect and token-leak risk, so callback URLs must be exact and scopes minimal.
+- **Cognito is an authorizer for other services.** API Gateway has a native Cognito user-pool authorizer, and ALB can authenticate users against a pool. Both validate the token before the request proceeds.
 
-## Cybersecurity Analogy
+## Limitations
 
-*Cognito* User Pools is like a **high-security access checkpoint.**
-
-It issues **temporary access badges (JWT tokens)**, controls who can enter your application, and enforces things like:
-
-- **2FA on badge pickup** (MFA setup)  
-- **Badge revocation rules** (token expiration and blacklisting)  
-- **Background checks** (email/phone verification, password strength)  
-- **Security desk logs** (*CloudTrail* logs of sign-in activity)
-
-And here’s the thing: if you don’t install cameras (*CloudWatch Logs*), if you let people share badges (token misuse), or you don’t segment access zones (scopes, groups, custom claims), **your checkpoint becomes a liability**.
-
-*Cognito* gives you the tools. **But you build the protocol.**
-
-## Real-World Analogy
-
-Let’s say **SnowyCorp** runs an internal app for employees to file security incident reports.
-
-Instead of maintaining their own login database, Snowy sets up a **Cognito User Pool**.
-
-- The HR team signs up users using email  
-- MFA is enforced for everyone  
-- App clients use the *Cognito Hosted UI* for login  
-- After login, a **JWT** token is issued  
-- The token is then attached to all API calls  
-
-If Snowy adds support staff from an external contractor, they federate login using **Google SSO via OpenID Connect** — without creating native users in the user pool.
-
-The **backend (AppSync)** checks token claims like:
-
-- `email_verified`  
-- `custom:department`  
-- `cognito:groups`  
-
-And enforces authorization with **VTL** templates that map permissions to claims.
-
-All this happens **without touching IAM Users or managing static credentials.**
-
----
-
-### 1. User Pool
-- Stores user identities and attributes (email, phone, custom fields)  
-- Handles login, registration, password reset  
-- Enforces password policies, email/**SMS** verification  
-
-### 2. App Clients
-- Represent *frontend* applications (e.g., web, mobile)  
-- Each client has its own settings: token expiration, refresh token validity, etc.  
-- Can be marked as public (no secret) or confidential (with client secret)  
-
-### 3. Tokens
-- After successful login, *Cognito* issues **3 JWTs**:  
-  - **ID Token** — contains user profile info (name, email, etc.)  
-  - **Access Token** — used to access APIs, includes scopes  
-  - **Refresh Token** — lets the app request new ID/Access tokens  
-
-### 4. Hosted UI
-- Optional login page hosted by AWS  
-- Supports **OAuth 2.0** flows (Authorization Code, Implicit)  
-- Can be customized with your logo/colors  
-
-### 5. Triggers
-- Lambda functions that plug into lifecycle events:  
-  - *Pre Sign-up* (e.g., prevent signups from banned domains)  
-  - *Post Confirmation* (e.g., welcome email)  
-  - *Pre Token Generation* (e.g., add custom claims)  
-  - *Post Authentication* (e.g., log sign-ins)  
-
-### 6. Federation
-- Supports **SAML 2.0, OpenID Connect**, and social logins (Google, Facebook, Apple)  
-- Federated identities are **linked to Cognito users with a shared ID**
-
----
-
-## Pricing Models
-
-*Cognito* User Pools pricing is based on:
-
-| **Tier**       | **Description**                                                                 |
-|----------------|----------------------------------------------------------------------------------|
-| Free Tier      | 50,000 monthly active users (**MAUs**) — generous for small teams               |
-| MAU-Based      | After free tier, charged per 1,000 **MAUs**                                     |
-| Federation     | Separate pricing for **SAML/OIDC** users (billed per **MAU**)                    |
-| MFA SMS        | Charged separately per message (Amazon **SNS** rates)                           |
-
-**Cost surprise warning:** If you enable **SMS-based** MFA globally and don’t restrict *geos*, you might see a **massive SMS bill.** Use **TOTP** (like Google *Authenticator*) when possible.
-
----
-
-## Other Explanations / Gotchas
-
-- **Tokens are not revocable** by default. You can set short expiration windows (e.g., 5 min access tokens) or use *Pre Token Generation* triggers to insert session-specific values (e.g., a logout flag).  
-- **Refresh tokens last up to 10 years** by default. Set a shorter expiration (like 30 days) unless you *really* need persistence.  
-- **Groups ≠ Roles** — *Cognito* User Pool groups are arbitrary strings. You can map them to roles manually in your *backend* or via claims in *Pre Token Generation*.  
-- **Don’t store secrets in custom attributes.** Custom attributes are exposed in plaintext via the ID token — *not a secure place to store app secrets*.  
-- **Hosted UI is public** unless you configure it tightly — it can be abused if you don’t restrict callback URLs and OAuth scopes properly.
-
----
-
-## Real-Life Example: Blizzard Developer Portal
-
-Blizzard wants developers to register apps that use their in-game event API. They need:
-
-- Secure user sign-up  
-- **OAuth 2.0** with Authorization Code flow  
-- Scoped access tokens  
-- MFA for admin logins  
-
-**They build:**
-
-- *Cognito* User Pool with App Client  
-- *Hosted UI* for login (Authorization Code flow)  
-- OAuth scopes like `read:events`, `write:characters`  
-- Lambda *Pre Token Generation* trigger to add scopes and tenant IDs  
-- *CloudTrail* logging of every login event  
-- Custom domain for the Hosted UI (e.g., `auth.blizzard.dev`)  
-
-**They enforce:**
-
-- `cognito:groups = developers, admins, reviewers`  
-- Token expiration = 5 minutes  
-- Refresh tokens expire after 14 days  
-- IP restriction on admin login via Lambda  
-
-Now, devs authenticate securely, and Blizzard’s **backend checks the access token against required scopes** — **no API call is processed unless claims match.**
-
----
-
-## Final Thoughts
-
-*Cognito* User Pools are powerful — but like **IAM**, they’re only as secure as your implementation.
-
-The biggest mistake teams make is **treating Cognito like a plug-and-play login box**, then forgetting to:
-
-- Harden token lifespans  
-- Enforce MFA properly  
-- Monitor sign-in activity with *CloudTrail* and *GuardDuty*  
-- Limit scopes, groups, and attributes  
-- Rotate app client secrets (for confidential clients)  
-
-*Cognito* gives you **OAuth, OpenID Connect, JWT, MFA, user management, federation** — all under one roof.
-
-But unless you secure the roof, the whole house leaks.
-
-If you're going to use *Cognito* for production, treat it like your front gate. Set guards, log entries, limit who gets a key, and monitor the flow.
-
-**Security doesn't end at login. That's just where it begins.**
-
+- **No pre-expiry revocation of issued tokens.** Revocation only kills refresh tokens, and only when enabled. Access and ID tokens remain valid for their full lifetime, so short TTLs are the real mitigation.
+- **Groups do not map to AWS permissions on their own.** Without an identity pool or backend logic, `cognito:groups` is just a string in a claim.
+- **Custom attributes offer no confidentiality.** They ride in the token in the clear and are unsuitable for anything sensitive.
+- **Public Hosted UI.** Left loosely configured, it is abusable through wildcard callbacks and over-broad scopes.
+- **SMS MFA cost and weakness.** Global SMS MFA without geo restrictions invites both a large bill and SIM-swap exposure.
+- **Authentication only.** A user pool grants no AWS resource access by itself; direct AWS SDK access for federated or frontend users needs an identity pool.
+- **Secure-by-default is overstated.** MFA, advanced security, short token lifetimes, and monitoring are opt-in. Out of the box the pool leaves several of the tested hardening controls off.

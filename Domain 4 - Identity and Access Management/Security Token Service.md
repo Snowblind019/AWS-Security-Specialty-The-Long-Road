@@ -1,162 +1,39 @@
 # AWS STS
 
-## What Is the Service
-AWS Security Token Service (STS) is the engine behind temporary credentials in AWS.
-Instead of hardcoding long-term access keys (which are risky and difficult to rotate), STS lets you request short-lived credentials that expire automatically. These temporary credentials can assume specific roles, have limited permissions, and are valid for a controlled time window — typically 15 minutes to 12 hours depending on the API used.
+Security Token Service is the engine that issues temporary AWS credentials. Instead of long-lived access keys, STS hands out short-lived credentials, an access key ID, a secret access key, and a session token, that carry a role's permissions and expire automatically, typically anywhere from 15 minutes to 12 hours depending on the call. It is the machinery beneath nearly every secure AWS pattern: role assumption, cross-account access, SAML and OIDC federation, role chaining, just-in-time elevation, and the roles that Lambda, EC2, and ECS run as. Whenever a workload or federated user acts without a static key, STS minted the credential. On the SCS exam it shows up as the API family behind federation and cross-account, plus a handful of trust controls (external ID, source identity, session tags) that are frequently tested. The thing to hold onto: STS turns "I am trusted to assume this role" into a scoped, time-boxed session, and the trust policy on the target role is what decides whether it will.
 
-STS is foundational to many secure AWS patterns:
-- Cross-account access
-- Federated identities (SSO, Active Directory, Cognito)
-- IAM role chaining
-- On-demand privilege elevation (Just-in-Time Access)
-- Access delegation for Lambda, EC2, ECS tasks
-- Session-based auditing
+## How it works
 
-Without STS, everything would rely on static keys — and static keys get leaked, copied, forgotten, and abused.
+- **Temporary credentials are three parts.** Access key ID, secret access key, and session token. All three must be presented; the session token is what marks them as STS-issued and time-limited.
+- **The assume-role API family picks the flow.** `AssumeRole` for an AWS principal (same or cross-account). `AssumeRoleWithSAML` for SAML IdP federation. `AssumeRoleWithWebIdentity` for OIDC/web identity (Cognito identity pools, GitHub Actions, EKS IRSA). `GetSessionToken` for an IAM user, mainly to attach MFA. `GetFederationToken` is the legacy federation path.
+- **The target role's trust policy gates it.** It must name the allowed principal and the correct action (`sts:AssumeRole`, `sts:AssumeRoleWithSAML`, `sts:AssumeRoleWithWebIdentity`), plus `sts:TagSession` or `sts:SetSourceIdentity` when those features are used.
+- **Session duration is bounded by the role.** `DurationSeconds` in the call cannot exceed the role's `MaxSessionDuration` (default 1 hour, up to 12). Role chaining is capped at 1 hour and cannot use the longer maximum.
+- **Everything is logged.** CloudTrail records the assume call with the source identity, session name, and external ID, and downstream API calls carry the assumed-role session context, giving auditability across account and federation boundaries.
 
----
+## The STS API family
 
-## Cybersecurity Analogy
-Think of IAM user access keys like permanent master keys to a building — risky, overpowered, and often copied.
-STS is more like issuing a temporary badge at the front desk. It’s tied to your identity, limited in what doors it can open, and it auto-expires after a few hours. If that badge gets dropped or stolen, the window of abuse is narrow. And if it’s misused, you can trace exactly who it was issued to and why.
+| API | Who calls it / identity source | Use case |
+|---|---|---|
+| `AssumeRole` | An existing AWS principal (user, role, service) | Cross-account and in-account role switching |
+| `AssumeRoleWithSAML` | User federated through a SAML 2.0 IdP | Enterprise SSO (AD FS, Okta) into a role |
+| `AssumeRoleWithWebIdentity` | OIDC token from a web identity provider | Cognito identity pools, GitHub Actions, EKS IRSA |
+| `GetSessionToken` | An IAM user (optionally with MFA) | Temporary creds for an IAM user, MFA enforcement |
+| `GetFederationToken` | An IAM user acting as a federation broker | Legacy federation for non-AWS users |
 
-## Real-World Analogy
-Imagine a secure facility like a data center. Rather than giving engineers a key that works 24/7 forever, they scan their company badge, state their purpose, and are handed a temporary access card good for the next 6 hours — and only for the racks or cages they’re allowed to touch.
+## What gets tested
 
-That’s STS. It enables just enough access, for just enough time — without permanent doors being left unlocked.
+- **Match the API to the identity.** SAML assertion means `AssumeRoleWithSAML`; an OIDC token (GitHub, EKS, Cognito) means `AssumeRoleWithWebIdentity`; an AWS principal crossing accounts means `AssumeRole`. IAM Roles Anywhere does not use an STS assume call directly; it has its own `CreateSession` endpoint that returns STS credentials.
+- **External ID stops the confused deputy.** When a third party assumes a role in your account, they pass a unique `ExternalId` and your trust policy conditions on `sts:ExternalId`. This prevents another of that third party's customers from tricking them into assuming your role. It is a classic exam item.
+- **Source identity is the sticky audit trail.** `sts:SetSourceIdentity` stamps an identifier that persists across role chaining and cannot be changed by the assumed session, so `aws:SourceIdentity` ties every downstream action back to the original human.
+- **Session tags drive ABAC.** `sts:TagSession` passes principal tags into the session, and transitive tags carry through role chaining, so policies can match `aws:PrincipalTag` to `aws:ResourceTag`.
+- **MaxSessionDuration lives on the role.** The caller cannot exceed it, and role chaining is capped at 1 hour regardless. This is separate from MFA, which is enforced with the `aws:MultiFactorAuthPresent` condition and by passing an MFA serial and token code.
+- **Regional endpoints are preferred.** Use regional STS endpoints; tokens from the legacy global endpoint may not work in opt-in Regions unless the account is configured for it.
 
----
+## Limitations
 
-## How It Works
-AWS STS issues temporary security credentials made up of:
-- **Access Key ID**
-- **Secret Access Key**
-- **Session Token**
-
-These credentials can be generated using different API calls depending on the use case.
-
-- **AssumeRole**
-  Used to switch identities — typically for cross-account access. The trusted principal (user, Lambda, EC2, etc.) assumes a target role.
-
-  ```json
-  {
-    "Action": "sts:AssumeRole",
-    "RoleArn": "arn:aws:iam::222222222222:role/ReadOnlyS3",
-    "RoleSessionName": "SnowyTempSession"
-  }
-  ```
-
-  The calling identity gets a temporary session with the permissions of the **ReadOnlyS3** role.
-
-- **GetSessionToken**
-  Generates temporary credentials for an IAM user (used rarely, mostly legacy). Can add MFA enforcement.
-
-- **AssumeRoleWithSAML**
-  For federated users logging in via SAML-based identity providers (Okta, ADFS, etc.).
-
-- **AssumeRoleWithWebIdentity**
-  Used when apps or mobile clients authenticate via OIDC-based IdPs (like Cognito, Google, Facebook). The app exchanges the identity token for a session.
-
-- **AssumeRoleWithJWT**
-  Used with IAM Roles Anywhere or newer OIDC flows like Kubernetes and GitHub Actions.
-
----
-
-## Session Duration and Control
-You control session length in the API call (e.g., `DurationSeconds = 3600`). Max session duration depends on the role's trust policy.
-
-For example:
-- Default max: 1 hour (3600 seconds)
-- Can be increased to 12 hours with a role setting
-- Some services (like Cognito Identity Pools) default to shorter durations
-
-You can also enforce:
-- MFA with `sts:TagSession` and condition keys like `aws:MultiFactorAuthPresent`
-- Session tags for attribute-based access control (ABAC)
-- External ID for 3rd-party delegation (e.g., Snowy grants Zayo access to S3 logs)
-
----
-
-## Security Controls and Considerations
-
-| Feature              | Description                                                                 |
-|----------------------|-----------------------------------------------------------------------------|
-| **Session Tags**     | Key-value pairs attached to the session for ABAC. Used in fine-grained policies. |
-| **External ID**      | Prevents confused deputy attacks. Required when 3rd parties assume roles.   |
-| **Source Identity**  | Traces the original calling identity for audit purposes (via CloudTrail).   |
-| **MFA Enforcement**  | Used to enforce strong identity verification before granting session.       |
-| **MaxSessionDuration** | Controlled in the trust policy of the target role.                        |
-
----
-
-## CloudTrail Integration
-Every STS call is logged in **CloudTrail** — both the API call and any resource access using the temporary credentials.
-
-You’ll see:
-- **AssumeRole** call from source identity
-- Session name and external ID (if provided)
-- Access events tied back to the session
-
-This creates **auditability across identity boundaries** — especially important in cross-account or federated setups.
-
----
-
-## Pricing Model
-STS itself is free. There’s no cost for:
-- Calling AssumeRole, GetSessionToken, or federating
-- Session tokens issued
-- Duration of the session
-
-You’re only charged for the underlying services used during the session (e.g., S3 reads, Lambda invokes, etc.).
-
----
-
-## Real-Life Example: Snowy’s Multi-Account Engineering Setup
-Let’s say you’ve got a **shared services account** for IAM and logging, and multiple **workload accounts** for production apps.
-
-Blizzard is a developer in the engineering org. She authenticates via Okta, which sends a SAML assertion to AWS. STS validates the assertion and issues a temporary credential to assume the **EngineeringDevAccess** role in the workload account.
-
-This role grants only:
-- Read access to CodeCommit repos
-- Deploy permissions in Dev environment
-- Session duration limited to 1 hour
-- Requires MFA via Okta
-
-The session tags include:
-- `department = engineering`
-- `project = SnowstormApp`
-
-Now policies in that account can say things like:
-
-```json
-"Condition": {
-  "StringEquals": {
-    "aws:RequestTag/project": "SnowstormApp"
-  }
-}
-```
-
-So she can only deploy to apps tagged to her project.
-
-At the end of the session, her permissions vanish. No long-term keys. No standing access. And everything is traceable in CloudTrail.
-
----
-
-## Final Thoughts
-AWS STS is the **glue** between identity, permissions, and governance in AWS.
-
-Whether you're building:
-- Secure cross-account access
-- Federated authentication for workforce or mobile apps
-- Temporary escalation workflows for just-in-time access
-- Session-aware access controls with ABAC
-
-...you’re using STS behind the scenes.
-
-Security-wise, STS allows for:
-- Short-lived credentials that expire
-- Auditability across federated boundaries
-- Policy enforcement tied to identity, session tags, and MFA
-- Complete removal of static access keys from almost all workloads
-
-This is one of the **most foundational services in AWS security**, and mastering its flows is essential for designing safe, scalable, multi-account environments.
+- **No automatic mid-session revocation.** Issued credentials stay valid until they expire even if the role's permissions change. To kill active sessions you attach a deny policy conditioned on `aws:TokenIssueTime` (the revoke-older-sessions pattern), since there is no one-click revoke.
+- **Role chaining costs you.** Chaining caps the session at 1 hour, forfeits the role's longer max duration, and drops non-transitive session tags at each hop.
+- **`GetSessionToken` is limited.** It is mostly for adding MFA to an IAM user and cannot be used to call most IAM and STS operations within that session.
+- **STS trusts the upstream, it does not authenticate it.** For federation, STS relies on the IdP's assertion or token and on your trust policy conditions; a weak IdP or loose trust policy undermines the whole session.
+- **Session tag constraints.** There are size and count limits, and the transitive-versus-non-transitive distinction matters when chaining, which is easy to get wrong.
+- **Source-note corrections.** There is no `sts:AssumeRoleWithJWT` API; GitHub Actions and Kubernetes use `AssumeRoleWithWebIdentity`, and Roles Anywhere uses its own `CreateSession`. And MFA is not enforced via `sts:TagSession` (that is for session tags); it is enforced with the `aws:MultiFactorAuthPresent` condition key.

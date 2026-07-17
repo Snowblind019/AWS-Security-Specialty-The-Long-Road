@@ -1,187 +1,38 @@
-# IAM Permissions: Console vs CLI vs API  
-
-## What Is This
-
-At first glance, IAM permissions in AWS seem straightforward. You define an action, attach it to a user, role, or group, and the principal is granted or denied access.  
-But here’s the catch:  
-The same permission can behave differently — or even fail silently — depending on how it's invoked:
-
-- AWS Management Console (web interface)  
-- AWS CLI or SDKs (programmatic)  
-- Direct API calls (under-the-hood services, automation, abuse)
-
-This leads to:
-
-- Privilege escalation that works only via the console  
-- Detection blind spots in automation paths  
-- Permissions that look correct but fail for certain methods  
-- Unexpected behavior during incident response or red team simulations  
-
-Understanding the execution context of a permission is critical. It’s not just “does this user have s3:PutObject” — it’s “how are they calling it?”
-
----
-
-## Cybersecurity Analogy
-
-Picture a building with three entrances:  
-
-- Front door (the AWS Console) — full concierge support, sign-in logs, forms, buttons.  
-- Side loading dock (CLI) — technical staff who skip the front desk and bring a pallet jack.  
-- Secret service tunnel (API calls) — automated robots coming in by blueprint, no small talk.  
-
-Even if you authorize someone to enter Room 301, that doesn't mean every door to Room 301 is accessible the same way.  
-Some IAM paths are console-only helpers. Others are raw underlying APIs.
-
----
-
-Snowy gives Winterday permission to `iam:CreateUser`. From the console, Winterday can create a new IAM user just fine.  
-But from the CLI? It fails.  
-
-**Why?**  
-The console doesn’t call `CreateUser` directly.  
-
-It might use chained API calls, session tagging, STS proxy assumptions, or even invoke non-obvious APIs under the hood.
-
----
-
-## Console vs CLI vs API — How They're Different
-
-
-| Method    | What It Is             | Characteristics                                            |
-|-----------|------------------------|------------------------------------------------------------|
-| Console   | Web UI interface       | Friendly UI, often invokes multiple APIs behind the scenes |
-| CLI/SDK   | Command-line tools / code wrappers | Makes direct API calls, 1:1 with IAM permission granularity |
-
-| API (raw) | STS/HTTPS calls directly | Low-level, scriptable, stealthy if not logged or scoped     |
-
----
-
-## Why This Matters
-
-- Some IAM permissions are used only by the console (e.g., `iam:ListAccountAliases` is required for login screen customization)  
-- Console may invoke multiple actions at once (creating an EC2 instance involves 12+ API calls)  
-- CLI/SDK calls may lack context (no browser session, UI session tags, or default region)  
-- Raw API abuse is common in breaches, especially through credential theft or signed STS tokens  
-
----
-
-## Case Study: s3:GetObject
-
-Let’s say a role has this policy:
-
-```json
-{
-  "Effect": "Allow",
-  "Action": "s3:GetObject",
-  "Resource": "arn:aws:s3:::snowy-data/*"
-}
-```
-
-**In the Console:**  
-This allows downloading files from the bucket via the web UI  
-
-**In the CLI:**  
-Works the same with `aws s3 cp` — but only if AWS CLI v2 is configured with the correct profile and region  
-
-**In the API:**  
-Attackers could generate a signed URL, inject it into another session, or use STS credentials with no MFA — unless your policy has conditions that explicitly block anonymous API paths  
-
----
-
-## Edge Case: IAM PassRole
-
-Example: To let a user launch an EC2 instance with a role, you must grant:
-
-```json
-"iam:PassRole"
-```
-
-But:
-
-- In the console, this action is abstracted — you select the role from a dropdown  
-- In the CLI, you must specify the exact role ARN  
-- If your policy doesn’t use a resource condition, an attacker can PassRole to any compatible resource via automation  
-
----
-
-## Detection Relevance
-
-### Console Behavior:
-
-- Often batches multiple actions — makes reverse engineering harder  
-- Uses console-only actions like:  
-
-  - `aws-portal:*`  
-  - `iam:ListAccountAliases`  
-  - `sso:ListInstances`  
-
-### CLI/API Behavior:
-
-- More direct, more granular  
-- Can expose misconfigured wildcards, like:  
-  - `s3:*`  
-  - `ec2:Describe*`  
-- More likely to be abused in red team scenarios or real breaches  
-
-### Detection Tip
-
-Use CloudTrail's `eventSource` and `userAgent` fields to tell where the action came from.
-
-| User Agent            | Source Type         |
-|-----------------------|---------------------|
-| signin.amazonaws.com  | Console UI          |
-| aws-cli/2.15.32       | CLI v2              |
-| Boto3/1.26.144        | Python SDK          |
-| aws-internal/         | Internal service call|
-| curl/7.64.1           | Manual or script abuse|
-
----
-
-## Real-Life Snowy Scenario
-
-Snowy is debugging why Winterday’s role can’t create a CloudFormation stack from the CLI.  
-
-The role has:
-
-- `cloudformation:CreateStack`  
-- `iam:PassRole`  
-- `s3:GetObject` (for pulling the template)  
-
-Winterday tries in the CLI — fails with AccessDenied.  
-
-Turns out:
-
-- Console uses `sts:AssumeRoleWithWebIdentity`  
-- Winterday's CLI session wasn’t exporting correct session tags  
-- The stack’s IAM role had a trust condition requiring `aws:PrincipalTag` that never showed up in the CLI session  
-
-**Conclusion:** Permissions looked right, but failed due to context mismatch between console and CLI.
-
----
-
-## Summary Table: Key Differences
-
-| Action Type                | Console | CLI  | API         |
-|---------------------------|---------|------|-------------|
-| Abstracted Multi-Call Flows| ✔️ Yes     | ✖️ No   | ✖️ No          |
-| Requires Additional Permissions| 🟣 Sometimes| ✖️ Rarely| ✖️ Rarely    |
-| Human-Readable Error Messages| ✔️ Yes   | Minimal| No         |
-| Used by Attackers          | Rare    | Common| Very Common |
-| Session Context (tags, UI state)| ✔️ Yes| 🟣 Must be manually set| 🟣 Must be manually signed or injected |
-
----
-
-## Final Thoughts
-
-If you're writing IAM policies or performing incident response and you're not thinking about how the action was executed, you're missing part of the story.  
-
-- Console behavior hides complexity — great for users, dangerous for architects.  
-- CLI/API shows the raw edges — often what attackers and automation use.  
-- Some permissions only exist to support the console, and you’d never know from CloudTrail alone.
-
-### When designing roles:
-
-- Test in all three contexts  
-- Use explicit deny + conditions to scope API use paths  
-- Monitor `userAgent` in CloudTrail to catch strange usage patterns
-
+# IAM Permissions: Console vs CLI vs API
+
+Every AWS action is ultimately an API call, and IAM evaluates the same policy the same way no matter how the call arrives. What changes across the console, the CLI/SDKs, and raw API requests is not the evaluation logic but two things around it: how many calls a single action fans out into, and what request context those calls carry. The console turns one button click into many API calls and needs supporting read permissions just to render its screens, so a policy that looks correct can behave differently depending on the entry point. On the SCS exam this shows up as "works in one path, fails in another," as privilege-escalation paths that hinge on context keys, and as attributing activity in CloudTrail by how it was invoked. The thing to hold onto: the permission does not change by path, but the set of calls and the request context do, and that difference is where both bugs and abuse live.
+
+## How the three paths differ
+
+- **Console** is a web UI that fans a single user action into many API calls. Launching an EC2 instance can be a dozen calls, and the screens need `List*`, `Describe*`, and `Get*` permissions to populate. A policy granting only the one write action may throw errors in the console because it cannot render, even though the write itself is allowed.
+- **CLI and SDKs** map roughly one-to-one to API actions. You call exactly the action you name, which is the least surprising path: `aws s3 cp` is `s3:GetObject`/`s3:PutObject` and little else.
+- **Raw API** is SigV4-signed HTTPS to the service endpoint, the ground truth beneath the other two. It is the most direct, the most scriptable, and the path most used in automation and in credential-theft abuse.
+
+## Comparison
+
+| Dimension | Console | CLI / SDK | Raw API |
+|---|---|---|---|
+| Relationship to API | Fans out into many calls | ~1:1 with API actions | The API itself |
+| Extra permissions to work | Often needs `List`/`Describe`/`Get` to render | Rarely | None beyond the action |
+| Request context | Federated/session context, may carry MFA and session tags | Whatever the profile/creds supply | Whatever the signer injects |
+| Error messages | Human-readable | Minimal | None; raw response codes |
+| Typical abuse use | Uncommon | Common | Very common |
+| CloudTrail fingerprint | `userAgent` like `signin.amazonaws.com` | `aws-cli/2.x` | SDK string or arbitrary/spoofed |
+
+## What gets tested
+
+- **The console needs supporting read permissions.** A frequent "works in CLI, fails in console" cause is a policy that grants the action but not the `Describe`/`List`/`Get` calls the console uses to draw the page. The action is allowed; the UI just cannot render. This is the accurate version of the confusion, and it is often the reverse of what people assume.
+- **Context keys differ by path, and that drives allow/deny.** `aws:MultiFactorAuthPresent`, `aws:PrincipalTag` (ABAC), source IP, and `aws:ViaAWSService` may be present in a federated console session but absent in a raw key-based CLI call. A condition satisfied one way and not the other is why the same identity succeeds in one path and gets AccessDenied in another.
+- **`iam:PassRole` must be resource-scoped.** The console hides it behind a role dropdown; the CLI requires the exact role ARN. Either way, a `PassRole` without a resource condition lets a principal hand a powerful role to a service and escalate. Scope it to specific role ARNs.
+- **Attribute activity with CloudTrail fields.** `eventSource`, `userAgent`, and `userIdentity.sessionContext` tell you whether a call came from the console, a specific SDK, or an internal service, which is the detection answer for "where did this action originate."
+- **`userAgent` is a signal, not proof.** A raw signed request can set any `userAgent` string it wants, so it can be forged. Use it to spot patterns, never as an authoritative security control.
+- **Everything resolves to an API call.** Presigned URLs and STS sessions carry the signer's authority: a presigned S3 URL works without further authentication until it expires, and STS credentials act with the assumed role's permissions. Policy conditions are what constrain these paths.
+- **Scope API paths with explicit deny and conditions.** Where a path should be blocked (no MFA, wrong source, wrong tag), an explicit deny with the right condition key is the enforcement, since it beats any allow.
+
+## Limitations
+
+- **CloudTrail does not narrate the console perfectly.** A single console action appears as many events, and some console-only helper calls are easy to miss or show up under unexpected event sources, creating detection blind spots.
+- **`userAgent` and client strings are spoofable.** Attribution by client fingerprint is best-effort; a determined caller controls that field on raw requests.
+- **The console masks which permission is load-bearing.** Because it quietly calls helpers you may already be allowed, it is hard to tell from the console alone which single permission a workflow actually depends on, which complicates least-privilege design.
+- **Some console features have no clean CLI equivalent.** Certain console-supporting actions exist only to power the UI, so testing a role in one path does not guarantee the others behave the same. Test roles in every path you intend to support.
+- **Source-note correction.** The claim that granting `iam:CreateUser` works in the console but fails in the CLI is not how it behaves; `CreateUser` is a direct one-to-one API action that works identically in both. The real path-dependent failures come from missing supporting read permissions and from context-key conditions, not from the write action itself.

@@ -1,223 +1,40 @@
-# JWT (JSON Web Token) 
-
-## What Is a JWT
-
-A **JSON Web Token (JWT)** is a compact, self-contained, cryptographically signed token used to securely transmit information between parties — typically for authentication, authorization, and session validation.
-
-JWTs are:
-
-- **Stateless** — all the info needed is in the token  
-- **URL-safe** — can be passed in headers, cookies, or query strings  
-- **Signed** (via HMAC or RSA/ECDSA) to prevent tampering
-
-Common in **OAuth2**, **OpenID Connect (OIDC)**, and **serverless APIs**
-
-They're used by:
-
-- **AWS Cognito** and **IAM Identity Center**
-- **OIDC identity providers** (Google, Auth0, etc.)
-- **Backend apps** for session validation
-- **API gateways** for auth checks
-
----
-
-## Cybersecurity Analogy
-
-Imagine you’re visiting **SnowySec HQ**. At the front desk, they hand you a badge:
-
-- It has your name, permissions, expiry time  
-- It’s digitally sealed by Snowy’s admin key  
-- You can use it to get into certain rooms  
-- But the badge itself carries all the info — no need to ask the desk every time
-
-That’s what a JWT is.  
-**Not just a session ID — it’s a portable security envelope, readable and verifiable on its own.**
-
-## Real-World Analogy
-
-
-- Issued by a trusted authority  
-- Contains your identity + claims (e.g., citizenship, visa)  
-- Has a signature to prevent forgery  
-
-- Can be read and verified by any border officer — no need to call your embassy  
-
-It’s **self-contained and validatable without phoning home** — perfect for distributed cloud systems.
-
----
-
-## Anatomy of a JWT
-
-A JWT is made of three parts, separated by dots (`.`):
-
-```
-<Header>.<Payload>.<Signature>
-```
-
-All three parts are **base64url-encoded JSON**.
-
-### 1. Header
-
-```json
-{
-  "alg": "RS256",
-  "typ": "JWT"
-}
-```
-
-Tells us:
-
-- `alg`: Algorithm used (HMAC, RSA, ECDSA)  
-- `typ`: It's a JWT
-
-### 2. Payload (Claims)
-
-```json
-{
-  "sub": "user123",
-  "iss": "https://auth.snowysec.com",
-  "aud": "my-app",
-  "exp": 1717261200,
-  "email": "blizzard@snowysec.com",
-  "role": "admin"
-}
-```
-
-This is where the action happens. It contains claims like:
-
-- `sub` = subject (user ID)  
-- `iss` = issuer  
-- `aud` = audience  
-- `exp` = expiration timestamp  
-- Custom claims like roles, email, tenant ID, etc.
-
-> This data is **readable by anyone** — so don’t put secrets here!
-
-### 3. Signature
-
-```
-base64url(header) + "." + base64url(payload) signed with secret or private key
-```
-
-- Ensures **integrity**  
-- Verifies **authenticity**  
-- Prevents **tampering**
-
-If the signature is invalid → **token rejected**
-
----
-
-## Signing Algorithms
-
-| **Algorithm** | **Type**   | **Notes**                                               |
-|---------------|------------|----------------------------------------------------------|
-
-| `HS256`       | HMAC       | Symmetric key — same key used to sign and verify        |
-| `RS256`       | RSA        | Asymmetric — private key signs, public key verifies     |
-| `ES256`       | ECDSA      | Smaller, faster, more modern                            |
-
-
-In **federated identity** (e.g., Cognito), you’ll usually see **RS256** with a **public JWKS endpoint** for verification.
-
----
-
-## Common Claims (JWT Payload)
-
-| **Claim** | **Description**                                  |
-|-----------|--------------------------------------------------|
-| `iss`     | Issuer — who created the token                   |
-| `sub`     | Subject — who the token is about                 |
-| `aud`     | Audience — who the token is intended for         |
-| `exp`     | Expiration — UNIX timestamp of expiry            |
-| `iat`     | Issued At — when it was issued                   |
-| `nbf`     | Not Before — when it becomes valid               |
-| `jti`     | JWT ID — unique identifier (nonce)              |
-
-You can add custom claims like `email`, `roles`, `org_id`, etc.
-
----
-
-## JWT in AWS
-
-| **Use Case**         | **JWT Usage**                                                                 |
-|----------------------|-------------------------------------------------------------------------------|
-| **Amazon Cognito**   | Returns JWTs (`id_token`, `access_token`) after successful auth              |
-| **IAM Identity Center** | Uses OIDC + JWTs for federated SSO                                      |
-| **API Gateway**      | JWT authorizer can verify tokens and extract claims for access               |
-| **Amplify**          | Passes Cognito JWTs to backend apps                                          |
-| **IoT / Custom Auth**| JWT used for identity + policy mapping                                       |
-
----
-
-## Security Considerations
-
-| **Risk**                        | **Mitigation**                                                                 |
-|---------------------------------|---------------------------------------------------------------------------------|
-| Expired tokens reused           | Always validate `exp`                                                          |
-| Weak algorithm chosen           | Never allow `alg: none`; reject unknown `alg`                                  |
-| Token stolen = session hijack   | Use HTTPS, short lifetimes, refresh token rotation                             |
-| Sensitive data in payload       | Never store secrets — JWT payloads are **not encrypted**                       |
-| No revocation mechanism         | Use short-lived tokens + refresh tokens + back-channel tracking                |
-
->  JWTs are **stateless** — they **can’t be revoked** unless you maintain a **blocklist** or **rotate keys**.
-
----
-
-## JWT vs Session Tokens
-
-| **Feature**         | **JWT**                                 | **Traditional Session Token**                     |
-|---------------------|------------------------------------------|---------------------------------------------------|
-| Stateless?          | ✔️ Yes                                  | ✖️ No (requires server/session store)              |
-| Scalable?           | ✔️ Ideal for distributed systems         | 🟣 Limited without central cache                   |
-| Self-verifiable?    | ✔️ Yes (if signed)                       | ✖️ Must look up session ID                        |
-| Revocable?          | ✖️ No (unless external logic)            | ✔️ Easily revoked                                  |
-| Used In?            | OAuth2, OIDC, APIs                       | Legacy web apps                                   |
-
----
-
-## Real-Life Example: API Access with JWT
-
-**SnowySec** builds a backend API with **API Gateway + Lambda**.  
-**Blizzard** logs in via **Cognito** → receives a JWT.
-
-JWT contents:
-
-```json
-{
-  "sub": "blizzard",
-  "email": "blizzard@snowysec.com",
-  "role": "analyst",
-  "exp": 1719870000
-}
-```
-
-When Blizzard makes a request:
-
-1. API Gateway **verifies the JWT signature** against Cognito's public JWKS endpoint  
-2. If valid → **extracts claims**  
-3. Passes claims to **Lambda function** as context  
-4. Lambda enforces **role-based logic** (analyst can only read logs)
-
-> No session store. No DB hits.  
-> **Pure token-based access control.**
-
----
-
-## Final Thoughts
-
-JWTs are the **cornerstone of modern identity and access** in the cloud.  
-They're **fast**, **flexible**, and **self-contained** — perfect for:
-
-- Stateless microservices  
-- Multi-account/cloud federated identity  
-- API auth  
-- Short-lived, verifiable sessions  
-
-But they come with trade-offs:
-
-- Can’t be revoked easily  
-- Must be validated thoroughly  
-- Don’t confuse “signed” with “encrypted”  
-
-> If you use them right, JWTs give you **Zero Trust**, **federated**, **auditable** access in a clean, modern package.
-
+# JWT (JSON Web Token)
+
+A JWT is a compact, self-contained token that carries signed claims between parties, used for authentication, authorization, and session validation. It is three base64url-encoded JSON parts joined by dots: a header, a payload of claims, and a signature. The signature (HMAC with a shared secret, or RSA/ECDSA with a private key) provides integrity and authenticity, so any party holding the right key or the issuer's public key can verify the token without calling back to the issuer. That statelessness is why JWTs underpin OAuth2 and OIDC and show up throughout AWS: Cognito issues them, Identity Center uses them for OIDC SSO, and API Gateway can validate them directly. The critical, constantly tested point is that signed is not encrypted. The thing to hold onto: a JWT's payload is readable by anyone who has the token, the signature only stops tampering, and the token is valid until it expires because there is nothing to revoke.
+
+## How it works
+
+- **Structure.** `header.payload.signature`, each base64url JSON. The header names the algorithm (`alg`) and type; the payload holds claims; the signature is computed over the encoded header and payload.
+- **Signing and verification.** HMAC uses one shared secret to both sign and verify; RSA/ECDSA sign with a private key and verify with the matching public key, typically fetched from the issuer's JWKS endpoint. The `kid` header selects which key in the JWKS to use, which is how key rotation works.
+- **Claim validation.** After the signature checks out, the verifier must validate claims: `exp` (not expired), `nbf` (already valid), `iss` (expected issuer), and `aud` (this token is for my app). Skipping `iss`/`aud` accepts tokens meant for someone else.
+- **Standard claims.** `iss`, `sub`, `aud`, `exp`, `iat`, `nbf`, `jti`, plus custom claims like roles, email, or tenant ID.
+- **In AWS.** Cognito returns ID and access tokens as JWTs; API Gateway offers a Cognito authorizer and a JWT authorizer (HTTP APIs) that verify signature, `iss`, and `aud`; ALB can authenticate via OIDC; Identity Center federates over OIDC.
+
+## JWT vs opaque session token
+
+| Feature | JWT | Opaque / session token |
+|---|---|---|
+| Stateless | Yes, self-contained | No, needs a server-side session store |
+| Self-verifiable | Yes, via signature | No, must look up the session ID |
+| Scalable across services | Ideal for distributed systems | Limited without a shared cache |
+| Revocable | No, valid until expiry unless external logic | Yes, delete the session |
+| Typical use | OAuth2, OIDC, APIs | Traditional server-rendered web apps |
+
+## What gets tested
+
+- **Signed is not encrypted.** The payload is base64url, not ciphertext, so anyone with the token can read every claim. Never put secrets in it. If payload confidentiality is required, that is JWE, a separate encrypted format.
+- **Validate signature and claims.** A common vulnerability is checking the signature but not `aud` and `iss`, which lets a valid token from another application or issuer through. Always verify audience and issuer alongside expiry.
+- **Reject `alg` tricks.** `alg: none` must be refused, and the verifier must pin the expected algorithm rather than trusting the header. Otherwise an RS256-to-HS256 confusion attack lets an attacker sign a token using the public key as an HMAC secret.
+- **Verification uses JWKS for asymmetric tokens.** Federated setups use RS256/ES256 with a public JWKS endpoint, and the `kid` header maps to the correct key, which is also how rotation is handled without breaking existing tokens.
+- **JWTs cannot be revoked mid-life.** They are stateless and valid until `exp`, so revocation needs a denylist or a key rotation, which is why the real controls are short lifetimes plus refresh-token rotation. This is the same limitation seen in Cognito, where revocation covers refresh tokens only.
+- **ID token vs access token.** In OIDC the ID token proves identity (its `aud` is the client) and the access token authorizes API calls (it carries scopes). Authorizing an API off the ID token is a planted error.
+- **API Gateway authorizers.** A JWT/Cognito authorizer validates the token before the request proceeds and can pass claims to the backend, replacing a session store with stateless token verification.
+
+## Limitations
+
+- **No pre-expiry revocation.** Being stateless is the strength and the weakness: a stolen token works until it expires unless you maintain a blocklist or rotate signing keys. Short TTLs are the mitigation.
+- **Not encrypted by default.** Confidentiality of claims depends on TLS in transit and on not putting sensitive data in the payload; the token at rest is fully readable.
+- **Bearer semantics.** Whoever holds the token can use it, so theft equals impersonation for the token's lifetime. Binding techniques (mTLS, sender-constrained tokens) and short lifetimes reduce the window.
+- **Clock dependence.** `exp` and `nbf` rely on synchronized clocks, so verifiers need a small leeway for skew or valid tokens get rejected.
+- **Security lives in the verifier.** A lax validator, one that accepts `alg: none`, skips `aud`/`iss`, or trusts the header's algorithm, is the weak point, not the token format itself.
+- **Token bloat.** Many claims make tokens large, which can bump against header and cookie size limits in real deployments.

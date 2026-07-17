@@ -1,167 +1,48 @@
-# Amazon Cognito
+# Amazon Cognito App Clients
 
-## What It Is
+An App Client is the per-application configuration object attached to a Cognito User Pool. A user pool by itself is just a directory of users; the app client is what lets a specific frontend, mobile app, or backend service actually authenticate against it. It defines which auth and OAuth2 flows are allowed, whether a client secret is required, which token types are issued and how long they live, and where Cognito redirects after sign-in and sign-out. In OAuth/OIDC terms the app client is the relying-party registration between your app and the user pool acting as IdP. On the SCS exam it matters because the app client is the trust boundary between application and identity provider, and the common exam traps are all misconfigurations here: secrets embedded in frontend code, wildcard redirect URIs, and refresh tokens that live too long. The thing to hold onto: one user pool, many app clients, each app client is an independently scoped set of rules for how one app is allowed to get tokens.
 
-An App Client in Amazon Cognito is like a login portal configuration for your app.  
-It defines how users can interact with your User Pool — what flows are allowed, whether refresh tokens are issued, how long tokens last, which OAuth grants are supported, and whether secret-based validation is required.
+## How it works
 
-Each frontend/mobile/backend app that needs to authenticate users must be configured as an App Client. This isn’t just for UI apps — even your API clients may be App Clients.
+- **The user pool starts empty of clients.** To authenticate any app against it you create at least one app client, and each app gets its own so their trust levels stay isolated.
+- **Each client has a Client ID, and optionally a Client Secret.** The ID identifies the client; the secret, when present, makes it a confidential client used in server-side flows.
+- **The client controls the token contract.** ID, access, and refresh token lifetimes, allowed OAuth2 grant types, allowed scopes, callback and logout URLs, whether token revocation is enabled, and which custom auth flows are permitted.
+- **Apps integrate the Client ID three ways:** the Cognito SDKs (SRP and direct auth APIs), the Hosted UI via redirect, or a raw OAuth2 grant flow against the pool's domain.
+- **Tokens come out of the flow as JWTs.** The ID token carries identity claims (OIDC), the access token carries scopes for authorizing API calls, and the refresh token is used to mint new ID and access tokens without re-login.
 
-**TL;DR:** App Clients are the configuration objects that tell Cognito:
+Token lifetime defaults, all configurable:
 
-- Who’s allowed to sign in  
-- What kind of tokens they can get  
-- Whether they need a client secret  
-- Whether refresh tokens are allowed  
-- Which OAuth2 flows (Auth Code, Implicit, etc.) are supported  
+| Token | Default | Configurable range |
+|---|---|---|
+| ID token | 1 hour | 5 min to 1 day |
+| Access token | 1 hour | 5 min to 1 day |
+| Refresh token | 30 days | 1 hour to 10 years |
 
----
+## Public vs confidential clients
 
-## Cybersecurity And Real-World Analogy
+| Dimension | Public client | Confidential client |
+|---|---|---|
+| Client secret | No secret | Has a client secret |
+| Where it runs | SPA, mobile app, anything on the user's device | Backend service, server-to-server |
+| Recommended flow | Authorization Code with PKCE | Authorization Code, or Client Credentials for machine-to-machine |
+| Why | Secret cannot be protected in code the user can inspect | Secret can be stored server-side and used to authenticate the client |
+| Risk if misused | Embedding a secret here leaks it | Exposing the secret in any client-side asset defeats it |
 
-**Cybersecurity Analogy**  
-Think of App Clients like the entry points to your login system. Each client has a unique identifier (and optionally a secret), and defines how users from this client can interact with your identity provider.
+## What gets tested
 
-It’s like configuring trust relationships in OAuth/OIDC between a relying party (your app) and the identity provider (Cognito User Pool).
+- **Public client means no secret; confidential means a secret.** A secret in a mobile app or SPA is a wrong answer every time, because anything shipped to the user's device can be extracted. Public clients use PKCE to protect the Authorization Code flow instead of a secret.
+- **Know the OAuth2 flows.** Authorization Code (plus PKCE for public clients) is the secure default. Implicit is legacy and returns tokens in the URL fragment, so treat it as the insecure option. Client Credentials is machine-to-machine with no user and no ID token.
+- **User Pools versus Identity Pools is the big distinction.** App clients live on user pools, which handle authentication and issue JWTs. Identity pools do authorization: they exchange a token for temporary AWS IAM credentials via STS. If a scenario needs temporary AWS access to S3 or DynamoDB, that is an identity pool, not an app client setting.
+- **Use the right token for the right job.** The access token carries scopes and is what authorizes API calls; the ID token is about identity and should not be used as an API authorizer. Mixing them up is a planted error.
+- **Token revocation must be enabled to kill sessions.** JWTs are self-contained and valid until expiry, so you cannot invalidate an already-issued access or ID token mid-life. Enabling revocation lets you invalidate refresh tokens on logout, which is why short access/ID token TTLs matter for sensitive apps.
+- **Redirect URIs must be exact.** Wildcard callback URLs are an open-redirect and token-leak risk; the exam wants precise, registered URIs.
+- **Advanced security features** (compromised-credential detection, adaptive authentication, MFA) are configured at the pool and client level and are the answer for scenarios about credential stuffing or risky sign-ins.
+- **Auditing is in CloudTrail.** `CreateUserPoolClient`, `UpdateUserPoolClient`, `AdminInitiateAuth`, `InitiateAuth`, and `RevokeToken` events carry the `client_id` and `auth_flow`, which is how you trace anomalous or brute-force login behavior back to a specific client.
 
-**Real-World Analogy**  
-Imagine your building has multiple entrances:
+## Limitations
 
-- Front Door (Web App)  
-- Side Door (Mobile App)  
-- Emergency Door (Admin CLI)  
-
-Each door has rules: who can enter, what kind of badge they get, and how long it lasts.  
-Those rules per entrance are the App Client settings.
-
----
-
-## How It Works
-
-When you create a Cognito User Pool, it’s empty.  
-To interact with it, you must create one or more App Clients.
-
-Each App Client:
-
-- Has a unique Client ID  
-- Optionally has a Client Secret (used in confidential flows)  
-- Controls:
-    - Token expiration durations (ID, access, refresh)  
-    - OAuth2 settings (redirect URIs, grant types)  
-    - Whether client secret is required  
-    - Whether token revocation is supported  
-    - Whether signing out invalidates refresh tokens  
-    - Whether advanced security is enforced  
-    - Custom authentication flow settings  
-
-You can then integrate this Client ID into your frontend/mobile/backend apps using:
-
-- Cognito SDKs  
-- Hosted UI redirect URLs  
-- OAuth2 grant flow  
-
----
-
-## Types Of App Clients
-
-| Type                | Description    | Typical Use                             |
-|---------------------|----------------|-----------------------------------------|
-| **Public Client**     | No secret       | Mobile apps, SPAs                       |
-| **Confidential Client**| Has client secret| Backend services, secure server-to-server apps |
-
-> Use a client secret only when it can be stored securely — e.g., backend server or API — not in frontend/mobile code.
-
----
-
-## Common Settings
-
-| Setting                | Explanation                                                 |
-|------------------------|-------------------------------------------------------------|
-| Generate Client Secret | Enables confidential client (OAuth2 standard)               |
-| Enable Sign-in API     | Allows InitiateAuth, AdminInitiateAuth                       |
-| Enable Token Revocation| Allows logout/refresh token invalidation                     |
-| Allowed OAuth Flows    | Authorization Code, Implicit, Client Credentials             |
-| Allowed OAuth Scopes   | openid, email, profile, custom scopes                        |
-| Callback URLs          | Where Cognito redirects after login                          |
-| Logout URLs            | Where to redirect after logout                               |
-| Token expiration settings| How long tokens last (ID, access, refresh)                |
-
-### Token Expiration Defaults (Unless Changed)
-
-| Token        | Default Expiry | Configurable?   |
-|--------------|---------------|-----------------|
-| ID Token     | 1 hour         | ✔️              |
-| Access Token | 1 hour         | ✔️              |
-| Refresh Token| 30 days        | ✔️ (1h to 10y)  |
-
-> Make sure token durations match your app’s session handling model.  
-> Long refresh tokens = long sessions = more risk if stolen.
-
----
-
-## Security Best Practices
-
-- Use client secrets only in secure environments  
-- Enable refresh token revocation if you’re using long-lived sessions  
-- Set short token TTLs for sensitive apps  
-- Avoid redirect URI wildcards (like `*`)  
-- Avoid exposing App Client secrets in mobile or frontend code  
-- Use separate App Clients for different trust levels (e.g., Admin vs Public UI)  
-- Name clients clearly (e.g., Snowy-WebApp-Client, Snowy-CLI-Admin)  
-
----
-
-## When To Use Multiple App Clients
-
-You’ll want to define different App Clients for:
-
-- Separate platforms (web vs mobile vs CLI)  
-- Different login methods (OAuth2 vs SRP vs custom auth)  
-- Varying token TTLs or refresh settings  
-- Apps with/without MFA  
-- Testing vs production environments  
-
-Each App Client is logically isolated and can use different callback URLs, secrets, flows, and token settings — even if they all point to the same User Pool.
-
----
-
-## AWS CLI & SDK Examples
-
-```bash
-aws cognito-idp create-user-pool-client \
-  --user-pool-id us-west-2_ABC123 \
-  --client-name SnowyWebApp \
-  --generate-secret \
-  --allowed-o-auth-flows user_password auth_code \
-  --allowed-o-auth-scopes email openid profile \
-  --callback-urls https://app.snowy.io/login/callback
-```
-
----
-
-## CloudTrail Visibility
-
-App Client actions show up in logs like:
-
-- CreateUserPoolClient  
-- UpdateUserPoolClient  
-
-- DeleteUserPoolClient  
-
-- AdminInitiateAuth (when login starts using this client)  
-- RevokeToken and InitiateAuth events  
-
-You’ll also see the `client_id` and `auth_flow` in these logs, useful for tracing weird login behavior or brute-force attempts.
-
----
-
-## Final Thoughts
-
-App Clients are not just configuration checkboxes — they define the security perimeter between your application and your identity provider.  
-They are your OAuth clients, your token factories, and your sign-in gatekeepers.
-
-Use them intentionally.  
-Configure them clearly.  
-Name them cleanly.  
-Protect their secrets.
-
+- **Issued JWTs cannot be revoked before expiry.** Revocation only invalidates refresh tokens, and only when the feature is enabled. Access and ID tokens stay valid for their full TTL no matter what, so a stolen token is usable until it expires. Short TTLs are the mitigation.
+- **A client secret is not a control for public clients.** It cannot be hidden in frontend or mobile code, so it provides no real protection there. PKCE is the correct mechanism for those clients.
+- **Long refresh token lifetimes are a standing liability.** A 10-year refresh token equals a near-permanent session if stolen, so lifetime must match the app's real session and risk model.
+- **App clients are scoped to a single user pool.** One client cannot span pools; each pool needs its own client configuration.
+- **Implicit flow exposure.** Because it returns tokens in the URL fragment, tokens can leak through browser history, referrers, and logs. It is deprecated in favor of Authorization Code with PKCE.
