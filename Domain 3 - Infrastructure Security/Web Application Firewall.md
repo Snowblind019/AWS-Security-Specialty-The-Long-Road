@@ -1,173 +1,43 @@
 # AWS WAF (Web Application Firewall)
 
----
+AWS WAF is a Layer 7 web application firewall that monitors and filters HTTP/S requests to your applications based on rules, protecting against common web exploits (SQL injection, XSS), bad bots, credential stuffing, and malicious or high-risk sources. It attaches in front of specific AWS resources, not an EC2 instance directly: CloudFront, ALB, API Gateway, AppSync, Cognito user pools, App Runner, and Amplify. It inspects HTTP method, URI, query strings, headers, cookies, and body. The thing to hold onto: WAF is application-layer, request-by-request filtering bound to a **web ACL** on a specific resource, so the exam tests when WAF (L7 web exploits) is the answer versus Shield (DDoS), Network Firewall (VPC traffic), or a security group (IP/port), and the scope rule that a CloudFront web ACL is global while ALB/API Gateway web ACLs are regional.
 
-## What Is The Service
+## How it works
 
-**AWS WAF** is a web application firewall that lets you monitor, filter, and control HTTP(S) traffic to your web applications based on customizable rules. It helps protect against common web exploits and vulnerabilities such as SQL injection, cross-site scripting (XSS), bad bots, and malicious IPs.
+- **Web ACL.** The container you associate with a protected resource. It holds rules and rule groups and a default action (allow or block) for requests that match nothing.
+- **Rule types.** IP set match, geo match, string/regex match on any request component, size constraint, **rate-based** rules (auto-block sources over a threshold), and SQLi/XSS match statements. Rules are evaluated in **priority order** and processed until a terminating action fires.
+- **Actions.** `Allow`, `Block`, `Count` (log without blocking, for tuning), plus **CAPTCHA** (interactive puzzle) and **Challenge** (silent JS browser check). CAPTCHA/Challenge only apply to `GET text/html`, not POST or CORS preflight.
+- **Managed rule groups.** AWS-maintained sets: Common Rule Set (OWASP-style), SQLi, Known Bad Inputs, Amazon IP Reputation, Anonymous IP, and paid add-ons: **Bot Control** (common and targeted bots), **Account Takeover Prevention (ATP)** for login flows, and **Account Creation Fraud Prevention (ACFP)** for signup. Mix managed with custom rules; you can override individual managed-rule actions.
+- **Rate-based rules.** The standard answer to brute force, scraping, and L7 floods. Default aggregation is client IP, but you can key on forwarded IP (X-Forwarded-For), a header, cookie, query arg, URI path, or a custom combination, and scope-down to a path.
+- **WCU (Web ACL Capacity Units).** Every rule has a WCU cost; a web ACL has 1,500 WCUs before extra request fees or a quota increase. Complex rule groups consume capacity fast, so WCU budgeting matters.
+- **Body inspection cap.** WAF inspects only the first part of the body (default 8 KB on CloudFront, 16 KB elsewhere), so oversized bodies can bypass content rules unless you raise the limit (at extra cost).
+- **Visibility.** Per-request logging to CloudWatch Logs, S3, or Kinesis Firehose, plus CloudWatch metrics and sampled requests.
+- **Centralization.** **Firewall Manager** applies WAF policies org-wide; **Shield Advanced** includes WAF on protected resources and uses it for automatic L7 DDoS mitigation.
 
-AWS WAF sits in front of your applications — not your EC2 instance directly, but services like:
-- Amazon CloudFront (CDN)
-- AWS Application Load Balancer (ALB)
-- Amazon API Gateway
-- AWS App Runner
+## WAF vs the other filtering layers
 
-It’s not a traditional network firewall — it operates at **Layer 7 (Application Layer)**, examining HTTP headers, URIs, query strings, cookies, and body contents.
+| | WAF | Shield (Std/Adv) | Network Firewall | Security group |
+|---|---|---|---|---|
+| Layer | L7 HTTP/S | L3/L4 (Std), +L7 (Adv) | L3-L7 VPC traffic | L3/L4 |
+| Inspects | Requests (URI, headers, body) | Traffic volume/patterns | Packets, domains, Suricata | IP/port |
+| Attaches to | CloudFront/ALB/API GW/AppSync/Cognito/App Runner | Edge/LB/EIP/Route 53 | VPC via routing | ENI |
+| Stops | SQLi, XSS, bots, L7 floods (rate rules) | DDoS | Egress, east-west, IDS/IPS | Reachability |
 
-**Why it matters:**  
-Cloud-native apps and APIs are public-facing, often accessible from anywhere on the internet. That makes them targets. With WAF, you can block bad requests before they even reach your backend systems. It’s especially useful in zero-trust architectures and defense-in-depth strategies.
+## What gets tested
 
-> WAF isn't meant to replace traditional controls like IAM or encryption — it's a first line of defense for application-level threats.
+- **WAF for web exploits, not DDoS or IP/port.** SQLi, XSS, bad bots, and application-layer request filtering are WAF. Volumetric DDoS is Shield; VPC/egress/domain filtering is Network Firewall; IP/port allow is a security group. Match the layer to the threat.
+- **Scope: CloudFront is global, ALB/API Gateway is regional.** A CloudFront web ACL is created in the global (us-east-1) scope; ALB, API Gateway, and AppSync ACLs are regional in the resource's Region. "Why won't my ACL attach to the CloudFront distro from eu-west-1" is the scope rule.
+- **Rate-based rules for brute force/scraping/L7 flood.** Auto-blocking sources over a threshold, optionally keyed on a header or scoped to the login path, is the WAF answer for credential stuffing and scraping.
+- **CAPTCHA/Challenge for automation.** Separating humans from bots on sensitive actions is CAPTCHA (interactive) or Challenge (silent), applied to GET HTML requests, often after Bot Control filters the obvious ones.
+- **Managed rules for baseline, then tune with Count.** Start with AWS managed rule groups plus IP reputation, run new rules in **Count** mode to avoid false positives, then switch to Block. This tuning workflow is a frequent best-practice question.
+- **Fraud/bot add-ons for account abuse.** Credential stuffing on login is **ATP**; fake-account creation on signup is **ACFP**; scraping/inventory bots are **Bot Control**. Scope them to the relevant path to control cost.
+- **WAF + Shield Advanced for L7 DDoS.** Shield Advanced's automatic application-layer mitigation places WAF rules in your web ACL, so WAF is the enforcement mechanism for L7 DDoS.
 
----
+## Limitations
 
-## Cybersecurity Analogy
-
-Imagine your application is a nightclub.  
-You don’t want just anyone walking in — especially not someone with a knife, fake ID, or a reputation for causing trouble.
-
-**AWS WAF is your bouncer.** It:
-- Checks every guest’s credentials (IP address, headers, geolocation)
-- Blocks anyone on the blacklist (IP reputation list)
-- Denies entrance if someone tries sneaking in a suspicious bag (SQL injection string in query)
-- Enforces guest behavior rules (rate-limiting, geo-blocking, user-agent filtering)
-
-You still have:
-- Cameras inside (**CloudTrail**)
-- A safe room (**VPC private subnets**)
-- An emergency plan (**Security Hub**)  
-But WAF is your **front-line filtering mechanism**.
-
-## Real-World Analogy
-
-Think of WAF like a **spam filter for your web app**.  
-Before the email lands in your inbox, it gets scanned for:
-- Known bad domains
-- Suspicious patterns
-- Rule violations
-
-Same with AWS WAF — it filters malicious or unwanted web traffic before it reaches your **ALB**, **API Gateway**, or **CloudFront distribution**.
-
----
-
-## How AWS WAF Works
-
-AWS WAF is made up of **Web ACLs (Access Control Lists)** and rules.  
-You associate a Web ACL with a resource (e.g., CloudFront distro or ALB), and it processes every incoming request through the rules in the ACL.
-
-### Web ACL
-
-A container for rules. It defines what happens when a rule matches (`ALLOW`, `BLOCK`, or `COUNT`).
-
-Web ACLs can include:
-- **Managed Rules** (prebuilt by AWS or AWS partners)
-- **Custom Rules** (your own logic)
-- **Rule Groups** (collections of rules)
-
-### Rule Types
-
-| Rule Type       | Purpose                                                       |
-|------------------|---------------------------------------------------------------|
-| IP Set Match     | Allow/block specific IPs or CIDR ranges                      |
-| Geo Match        | Allow/block traffic by country                               |
-| Regex Match      | Match against URI, headers, or body using regular expressions|
-| Size Constraint  | Match on length of request component (e.g., URI, body)       |
-| Rate-Based Rules | Automatically block IPs that exceed a set request threshold  |
-| SQL Injection/XSS| Detect and block common exploit attempts                     |
-| Label Match      | Use labels (tags) to build conditional logic across rules    |
-
-**Rule Priority:**  
-WAF evaluates rules in order. **First match determines the action** (unless using `COUNT` mode).
-
-### Actions
-
-- `ALLOW` — lets the request through  
-- `BLOCK` — rejects the request  
-- `COUNT` — tracks matching requests without blocking
-
-### Visibility
-- Matches can be sent to **CloudWatch Logs**
-- Trends and dashboards can be viewed using **AWS WAF metrics**
-
----
-
-## Managed Rule Groups
-
-AWS and Marketplace vendors offer predefined rule groups you can plug in:
-
-- `AWSManagedRulesCommonRuleSet`  
-- `AWSManagedRulesSQLiRuleSet`  
-- `AWSManagedRulesKnownBadInputsRuleSet`  
-- `AWSManagedRulesAmazonIpReputationList`  
-
-These provide out-of-the-box protection for common threats, with **automatic updates** maintained by AWS.
-
-> You can mix **managed rules** with your **custom rules**.
-
----
-
-## Integration Points
-
-| Service          | Role with AWS WAF                                     |
-|------------------|--------------------------------------------------------|
-| CloudFront       | Most common entry point. Protect global CDN traffic   |
-| ALB              | Protect apps hosted behind an Application Load Balancer |
-| API Gateway      | Control which clients can hit your APIs               |
-| App Runner       | Serverless app hosting — can be protected with WAF    |
-| CloudWatch       | Logs and metrics for request counts and blocked requests |
-| AWS Firewall Manager | Centralized WAF policy management across accounts |
-| AWS Shield Advanced | Integrated with WAF for DDoS protection            |
-
----
-
-## Pricing Models
-
-AWS WAF is priced in **three parts**:
-
-| Component | Cost Model                              |
-|-----------|------------------------------------------|
-| Web ACL   | Flat fee per ACL (monthly)               |
-| Rules     | Fee per rule or rule group per ACL       |
-| Requests  | Fee per million requests processed       |
-
-> If you're using **Managed Rules**, there may be **additional fees** per rule group, depending on the vendor.
-
-> **Use WAF intelligently** to avoid ballooning costs — keep rules concise and use `COUNT` mode while testing.
-
----
-
-## Use Cases
-
-- Block traffic from high-risk countries  
-- Limit abuse from scraping bots  
-- Protect APIs from injection attacks  
-- Rate-limit sign-up attempts or login attempts  
-- Filter payloads based on regex (e.g., suspicious headers)  
-- Meet compliance for web-facing applications (PCI DSS, HIPAA, etc.)
-
----
-
-## Best Practices
-
-- Use `COUNT` mode to monitor a rule before enforcing it  
-- Pair with **CloudWatch Dashboards** for visibility  
-- Enable **AWS WAF Logging** (via Kinesis Firehose to S3) for long-term retention  
-- Apply **Managed Rules** for baseline protection, then layer on **custom rules**  
-- Tune rules based on real traffic — avoid over-blocking  
-- Use **Labels and conditional logic** for complex scenarios  
-- Integrate with **Firewall Manager** for org-wide policy management
-
----
-
-## Final Thoughts
-
-WAF isn’t about stopping everything — it’s about **raising the bar for attackers** and **filtering out garbage traffic** before it costs you performance, money, or security.
-
-As a Cloud Security Architect, **AWS WAF** gives you one of the most direct levers to control the behavior of internet traffic before it hits your infrastructure.
-
-But like any tool — its power is in how well you **design your rules**, **test them**, and **integrate them** into a larger detection and response workflow.
-
-> It’s not enough to just turn on WAF — you need to know what you're defending, what you're filtering, and how it fits into your threat model.
-
-**Done right, WAF becomes your scalable, automated, always-on application gatekeeper.**
-
+- L7 HTTP/S only, and only on supported front-end resources. It cannot protect raw TCP/UDP, backend VPC traffic, or a bare EC2 instance; those need Network Firewall or security groups.
+- Body inspection is capped (8 KB CloudFront / 16 KB regional by default), so large payloads can evade content rules unless the limit is raised at extra cost.
+- WCU limits (1,500 per web ACL) constrain rule complexity; heavy managed groups can exhaust capacity and trigger overage fees or quota requests.
+- Pricing compounds across web ACL, per rule, per million requests, and add-on groups (Bot Control, ATP, ACFP), with fraud tiers reaching very high per-request rates, so rules must be scoped and tuned.
+- WAF reduces but does not eliminate attacks and can false-positive; rules need Count-mode monitoring and ongoing tuning, and it does not replace IAM, encryption, or input validation in code.
+- It is not a DDoS service on its own; volumetric protection is Shield, and WAF's L7 flood defense (rate-based rules, Shield Advanced automation) complements rather than replaces it.

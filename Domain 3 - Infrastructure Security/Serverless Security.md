@@ -1,204 +1,44 @@
 # Serverless Security
 
-## What Is Serverless Security
-
-Serverless architecture allows developers to run applications without managing underlying infrastructure. In AWS, the most common serverless compute service is AWS Lambda, but others like API Gateway, Step Functions, AppSync, EventBridge, and Fargate (to some extent) also count.
-While serverless platforms abstract away servers, they do not eliminate the need for security — they just shift it.
-In traditional models, you worry about patching OSs, firewall rules, AMI hardening, etc. In serverless, those responsibilities fall to AWS — but you're now in charge of securing your code, configurations, permissions, and event triggers.
-
-Serverless doesn’t mean "secure by default." You must still address:
-
-- Overprivileged IAM roles
-- Event injection attacks
-- Function-level isolation
-- Secrets management
-- Logging and traceability
-- CI/CD pipeline risks
-
----
-
-## Cybersecurity Analogy
-
-Think of serverless like renting a locked storage unit that automatically opens when you arrive. You don't need to worry about the building, locks, or maintenance — just what you store inside.
-But if you leave the door open, share the key with everyone (overbroad IAM roles), or let anyone call you to open it (API Gateway with public access), you’re at serious risk.
-
-## Real-World Analogy
-
-Imagine you're hosting a restaurant pop-up where the city provides the infrastructure: tables, power, water. All you need is your team and your recipes.
-But if your staff doesn't wash hands (insecure code), shares the tip jar with everyone (too many IAM permissions), or lets anyone modify the recipe cards (CI/CD risks), the whole setup collapses.
-You didn’t run the building — but you’re still responsible for how safe the food is and who handles it.
-
----
-
-## How It Works / What to Secure
-
-### 1. Function Permissions (IAM)
-
-Each Lambda function runs with an IAM execution role
-This role should follow least privilege — grant only what’s required (read from S3, write to DynamoDB, etc.)
-Avoid wildcards (*) in policies — especially `iam:*`, `kms:*`, `ssm:*`
-Use resource-level constraints: limit access to specific bucket ARNs, secret ARNs, table names
-You can use IAM Access Analyzer to detect unused permissions over time.
-
-### 2. Event Trigger Hardening
-
-Serverless apps are event-driven — they’re triggered by:
-
-- API Gateway
-- S3 events
-- DynamoDB Streams
-- EventBridge
-- SNS/SQS
-
-If the event source is public-facing (e.g., API Gateway), you must:
-
-- Enforce authorization (IAM auth, Cognito, JWT)
-- Validate payloads to avoid event injection
-- Rate-limit with WAF or usage plans
-- Encrypt data in transit with TLS (API Gateway enforces HTTPS by default)
-
-### 3. Secrets Management
-
-Never hardcode credentials in Lambda environment variables or code
-
-Use:
-
-- AWS Secrets Manager (auto-rotation + KMS encryption)
-- SSM Parameter Store (SecureString)
-Retrieve secrets at runtime (decryption requires KMS permissions scoped to role)
-
-
-Example: a Lambda needing RDS credentials should fetch them on-demand using IAM + KMS + Secrets Manager.
-
-### 4. Code & Dependency Risks
-
-
-Lambda bundles often contain 3rd party libraries (`node_modules`, `site-packages`)
-
-Risks:
-
-- Vulnerable packages
-- Obfuscated malicious dependencies (typosquatting: aws-sdk vs aws_sdk)
-
-Use:
-
-- Static analysis in CI/CD (SonarQube, Checkov, Semgrep)
-- Software Composition Analysis (SCA) tools to scan dependencies
-
-- Amazon Inspector (for container images, not Lambda ZIPs yet)
-
-Also watch for logic bugs — there's no OS sandbox to blame if something misbehaves.
-
-### 5. Logging, Monitoring & Detection
-
-Lambda logs go to CloudWatch Logs by default
-
-You should:
-
-- Enable structured logging (JSON format)
-- Add correlation IDs to trace across services
-- Use X-Ray for distributed tracing
-- Aggregate findings in Security Hub, GuardDuty, or your SIEM
-
-Enable CloudTrail for invocation logs (via API Gateway, EventBridge, etc.)
-For S3 triggers: enable S3 object-level logging to know who uploaded the file that triggered the function.
-
-### 6. CI/CD and Deployment Security
-
-Serverless deployments use IaC (CloudFormation, SAM, CDK, Terraform)
-
-Secure the pipeline:
-
-- Sign artifacts (SAM + Code Signing)
-- Use IAM conditions to restrict deploy access to specific roles
-- Prevent privilege escalation via drift detection
-- Avoid deploying from personal developer accounts
-
-Enable CloudTrail + CodePipeline logs to detect tampering.
-
-### 7. Runtime Constraints and Isolation
-
-Lambda functions run in microVMs (Firecracker) that are:
-
-- Isolated per function
-- Ephemeral (no persistence)
-- Auto-scaled per event
-
-But beware:
-
-- Execution context reuse can leak memory state (keep function stateless!)
-- Timeouts and concurrency limits must be managed to prevent DOS
-
-Set timeout, memory, retry, and DLQ policies per function.
-
----
-
-## Pricing Models
-
-| **Component**     | **Pricing Considerations**                          |
-|-------------------|-----------------------------------------------------|
-| **Lambda**        | Pay per request + duration (GB-s)                   |
-| **Secrets Manager**| Charged per secret + API calls                     |
-| **CloudWatch Logs**| Pay per GB ingested + stored                       |
-| **X-Ray**         | Charged by traces captured                          |
-| **API Gateway**   | Pay per million requests + data transferred         |
-| **WAF**           | Charged by rules + requests inspected               |
-| **Code Signing**  | No extra charge, but AWS Certificate Manager KMS keys apply |
-
-No charge for IAM, but overbroad policies can cost you in blast radius.
-
----
-
-## Real-Life Snowy-Style Example
-
-Let’s say Blizzard’s startup uses Lambda to process photo uploads.
-
-- Users hit an API Gateway endpoint that triggers a Lambda to resize the photo.
-- The resized image is stored in an S3 bucket.
-- Metadata is logged in DynamoDB.
-
-If Blizzard:
-
-- Allows `s3:*` on all buckets
-- Uses environment variables for secrets
-- Skips input validation
-- Forgets to set a timeout
-- Doesn’t track invocations
-
-Then:
-
-- An attacker could upload a malformed image that DoS-es the function
-- Secrets could leak on a memory snapshot
-- A malicious user could modify the event payload to write to a different S3 bucket
-- There’s no trace of who triggered what
-
-Instead, Snowy implements:
-
-- Least privilege IAM roles
-- S3 bucket policies scoped to only allow access from that Lambda ARN
-- Secrets pulled from SSM
-- WAF on API Gateway with input validation and rate limiting
-- CloudTrail and CloudWatch Alarms to detect abuse
-- Code Signing config in place via SAM templates
-
----
-
-## Final Thoughts
-
-Serverless doesn’t mean you’re off the hook — it just moves the attack surface. You now secure code, events, identities, and configurations, not OS patches and VPCs.
-
-### Your biggest risks:
-
-- Overpermissioned IAM roles
-- Unvalidated triggers
-- Secrets exposure
-- Untracked invocations
-
-### Your best defenses:
-
-- IAM scoping + access analysis
-- GuardDuty (anomalies), CloudTrail (history), Config (drift)
-- Code Signing + SCA
-- Runtime constraints + observability
-
-AWS gives you the tools — but you own the glue logic between them. And that’s where most breaches happen.
+Serverless runs application code without managing the underlying infrastructure. In AWS the core service is Lambda, with API Gateway, Step Functions, AppSync, EventBridge, SNS/SQS, and Fargate rounding out the event-driven stack. Serverless does not remove security, it shifts it: AWS owns the OS, hypervisor, runtime patching, and Firecracker microVM isolation, while you own the code, the IAM execution role, event-trigger authorization, secrets, and the CI/CD pipeline. The thing to hold onto: serverless collapses the attack surface to identity, events, code/dependencies, and configuration, so the exam's serverless questions are almost always "least-privilege execution role," "authorize and validate the trigger," or "get secrets and vulnerable dependencies out of the function," not OS or network hardening.
+
+## How it works
+
+- **Execution role (IAM).** Every function assumes an execution role. Least privilege, resource-scoped ARNs, no wildcards (`s3:*`, `kms:*`, `iam:*`). Use IAM Access Analyzer to find unused permissions. The role is the blast radius if the function is compromised.
+- **Event-trigger hardening.** Functions fire from API Gateway, S3 events, DynamoDB Streams, EventBridge, SNS/SQS. For public triggers (API Gateway) enforce authorization (IAM/SigV4, Cognito, JWT/Lambda authorizer), validate and schema-check the payload to prevent event injection, rate-limit with WAF or usage plans, and rely on enforced HTTPS.
+- **Secrets.** Never hardcode in code or plaintext env vars. Pull from Secrets Manager (rotation + KMS) or SSM Parameter Store SecureString at runtime, with `kms:Decrypt` scoped to the role. Lambda environment variables can be encrypted at rest with a customer-managed KMS key (and encryption helpers for in-transit protection), but a secret still belongs in a secrets store.
+- **Code and dependency scanning.** Function packages bundle third-party libraries (risk: vulnerable and typosquatted packages). **Amazon Inspector now scans Lambda functions and layers for both dependency vulnerabilities and custom application code** (injection, data leaks, weak crypto, missing encryption), with remediation guidance. Pair it with SCA and SAST (Semgrep, Checkov) in CI, since Inspector is one signal, not the whole pipeline.
+- **Logging and tracing.** Lambda logs to CloudWatch by default; add structured JSON logs and correlation IDs, X-Ray for distributed tracing, CloudTrail for invocation and control-plane events (and S3 object-level logging for S3-triggered functions), aggregate in Security Hub/GuardDuty.
+- **CI/CD.** Deploy via IaC (SAM/CDK/CloudFormation/Terraform). Sign artifacts with **Lambda code signing**, restrict deploy roles with IAM conditions, detect drift, and never deploy from personal accounts. CloudTrail plus pipeline logs catch tampering.
+- **Runtime and isolation.** Functions run in per-function **Firecracker microVMs**, ephemeral and auto-scaled. But the **execution environment is reused** across invocations, so global/static state and `/tmp` persist for that environment's lifetime. Keep functions stateless, clear `/tmp`, and set timeout, memory, concurrency, retry, and DLQ per function to bound abuse and cost.
+
+## Serverless responsibility and controls at a glance
+
+| Concern | AWS owns | You own | Control |
+|---|---|---|---|
+| Host/OS/runtime patching | Yes | No | Managed by Lambda |
+| microVM isolation | Yes | No | Firecracker |
+| Function permissions | No | Yes | Least-privilege execution role |
+| Trigger auth | No | Yes | API GW authorizer, WAF, validation |
+| Secrets | No | Yes | Secrets Manager / SSM + KMS |
+| Dependencies + code | No | Yes | Inspector + SCA/SAST in CI |
+| Deploy integrity | No | Yes | Code signing, scoped deploy roles |
+
+## What gets tested
+
+- **Least-privilege execution role.** Overbroad function permissions plus a compromised dependency is the standard serverless breach path. The fix is a resource-scoped role, not a network change; there is no OS or SG to hide behind.
+- **Authorize and validate the trigger.** Public API Gateway to Lambda needs an authorizer (Cognito/JWT/IAM), payload validation against event injection, and WAF/usage-plan rate limiting. "Anyone can invoke / malformed event reaches the function" maps here.
+- **Secrets out of env vars.** Leaked-credential scenarios point to Secrets Manager/Parameter Store retrieval at runtime with scoped KMS, and optionally CMK-encrypted env vars, not hardcoding.
+- **Inspector scans Lambda now.** Note the current state: Inspector does dependency and code scanning for Lambda functions and layers. An older "Inspector can't scan Lambda" assumption is wrong. It is the AWS-native answer for finding vulnerable serverless code and packages.
+- **Cross-resource scoping.** A function writing to the wrong bucket is contained by an S3 bucket policy that allows only the function's role/ARN plus a tightly scoped execution role, so a manipulated event cannot redirect writes.
+- **Statelessness and environment reuse.** Because execution environments are reused, secrets or PII left in global state or `/tmp` can leak into a later invocation. "Data from one invocation appears in another" is the reuse trap; keep functions stateless.
+- **Deployment integrity.** Preventing tampered function code is Lambda **code signing** plus scoped deploy roles and CloudTrail, distinct from runtime controls.
+
+## Limitations
+
+- Serverless removes OS and runtime patching but not application-layer risk. Vulnerable dependencies, injection, and logic bugs are entirely yours; managed infrastructure does not make code safe.
+- The execution environment is reused, so statefulness leaks across invocations. Isolation is per-function, not per-invocation, which surprises people expecting a clean slate each call.
+- Inspector is one signal. It scans dependencies and code but does not replace pre-deployment SCA/SAST, PR gating, SBOMs, or layer scanning in the pipeline.
+- Env var encryption protects at rest but a value still lives in the function configuration; true secrets belong in Secrets Manager/Parameter Store, fetched at runtime.
+- Event-driven sprawl expands the trigger surface. Each source (S3, SNS, EventBridge, API GW) is its own authorization and validation problem; one unhardened trigger undermines the rest.
+- Concurrency and timeout misconfiguration enable denial-of-wallet and DoS. Serverless auto-scales, so unbounded concurrency turns an abusive caller into a cost and availability incident; limits and DLQs are mandatory.

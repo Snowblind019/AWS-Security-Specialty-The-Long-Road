@@ -1,237 +1,44 @@
-# Amazon EC2
-
-## What Is Amazon EC2
-
-Amazon EC2 gives you **virtual machines in the cloud**. You pick an AMI (OS image), a type (CPU/mem), and a network (**VPC**), and AWS gives you a **bootable** instance.
-
-But here’s the thing:  
-**You manage everything inside the instance.**  
-From OS patches to SSH keys to firewalls to software versions — **AWS doesn’t touch your guest OS.** You’re on the hook.
-
-That means if you:
-
-- Forget to patch a public-facing EC2 running Ubuntu 18.04  
-- Leave a stale SSH key for a terminated contractor  
-- Install `nginx` and forget to disable directory listing  
-- Or let an EC2 **IAM** role write to `s3://snowy-prod-finance` …
-
-Then you’ve basically handed attackers the keys and said, “Welcome in.”
-
----
-
-## Cybersecurity Analogy
-
-Think of EC2 as renting a secure apartment inside a skyscraper.  
-AWS gives you:
-
-- The building (data center)  
-- The walls (hypervisor)  
-- The lock on your front door  
-
-**But you bring everything else inside:**
-
-- Who gets keys  
-- What you install  
-- Whether your windows are locked  
-- Whether your security camera is running  
-
-And if you forget to install antivirus, leave the oven on, and hand out 12 spare keys to old roommates… that’s on you.
-
-## Real-World Analogy
-
-**SnowyCorp** spins up a temporary EC2 instance to run a data transformation job over the weekend.
-
-- They give it full `AdministratorAccess` so it can debug issues fast  
-- It has port 22 open to the world  
-- And they forget to shut it down  
-
-**Monday morning:**
-
-- It’s been brute-forced overnight  
-- A crypto miner is now running inside  
-- **CloudTrail** is full of `s3:GetObject` calls to sensitive buckets  
-
-No alarms fired. No **GuardDuty** finding.  
-Why? Because **nobody configured anything.**
-
----
-
-## Key Security Concepts You Must Lock Down
-
-### 1. Instance Roles (**IAM**)
-
-Each EC2 instance can assume an **IAM** role at boot.  
-This is where **blast radius gets real**:
-
-- **Overpermissioned** roles (e.g., `s3:*`, `kms:*`, `ec2:*`)  
-- **Unscoped** roles (no `Resource:` scoping)  
-- Roles shared across too many environments  
-
-**Best Practices:**
-
-- Create one **IAM** role per purpose (least privilege)  
-- Attach roles via **Instance Profile**  
-- Use `iam:PassRole` restrictions in pipelines to control who can assign what  
-- Rotate temporary credentials regularly  
-- Monitor `GetRoleCredentials` via **CloudTrail**
-
-### 2. Instance Metadata Service (IMDSv2)
-
-**IMDS** is what the instance uses to get its own credentials, region info, tags, and more.
-
-**In IMDSv1:**
-
-- Anyone who got access to the OS could `curl` their way to stealing **IAM** credentials
-
-**In IMDSv2:**
-
-- AWS requires a **session token** and uses a **TTL** + hop limit to prevent **SSRF**
-
-**You should:**
-
-- Enforce **IMDSv2 only**  
-- Set **hop limit = 1** to prevent **SSRF** from containers  
-- Monitor for failed token fetches — could indicate probing  
-
-### 3. SSH Access and Key Management
-
-This is where most teams mess up.
-
-**Risks:**
-
-- Stale `authorized_keys`  
-- Insecure ciphers or SSH versions  
-- Public AMIs with **pre-installed backdoors**  
-- Default login user with reused keys  
-
-**Fix it:**
-
-- Use **EC2 Instance Connect**, not manual key distros  
-- Or better: **SSM Session Manager** (no SSH at all)  
-- Use **cloud-init** to inject ephemeral keys on launch  
-- Rotate SSH keys regularly and script the rotation  
-- Restrict source IPs via **Security Groups**
-
-### 4. Networking: Security Groups + NACLs
-
-#### **Security Groups (SGs):**
-
-- **Stateful**  
-- Allow rules only (no denies)  
-- Applied at **ENI** level  
-- Default outbound is wide open  
-
-#### **Network ACLs:**
-
-- **Stateless**  
-- Can deny  
-- Work at **subnet** level  
-- Evaluated in order  
-
-**You should:**
-
-- Apply tight **SGs** per workload  
-- Use **SG** references instead of **CIDRs** when possible  
-- Deny all inbound except known ports  
-- Limit outbound to only required services (S3, RDS, etc.)  
-- Alert on `0.0.0.0/0` ingress or egress rules  
-
-### 5. AMI Hygiene and Hardening
-
-If your AMI is insecure, every EC2 launched from it will be too.
-
-**Risks:**
-
-- Outdated packages  
-- Embedded secrets  
-- Debugging tools left enabled  
-- Firewall off  
-- Root login via SSH  
-
-**What to do:**
-
-- Use **golden AMIs** with baseline controls  
-- Scan with **Amazon Inspector**  
-- Harden OS with **CIS benchmarks**  
-- Store AMI source code (Packer, Ansible, etc.) in Git  
-- Tag AMIs with owner + patch status  
-
-### 6. Monitoring and Visibility
-
-By default, EC2 instances are a black box.
-
-You need to add:
-
-- **CloudWatch Agent** for system metrics  
-- **CloudWatch Logs** for `/var/log/secure`, `nginx` logs, etc.  
-- **SSM Agent** for command execution, patching, and session control  
-- **Inspector** for vulnerability scans (OS + apps)  
-- **GuardDuty** for detecting:
-  - Crypto mining  
-  - Port scanning  
-  - Credential **exfil**  
-  - Unusual traffic  
-
-> **You must explicitly install, enable, and configure these.**
-
-### 7. Patch Management
-
-EC2 is **not automatically patched** — that’s your job.
-
-**You can:**
-
-- Use **SSM Patch Manager** to define patch baselines  
-- Schedule patch windows with **Maintenance Windows**  
-- Tag instances by environment (`PatchGroup = prod`)  
-- Monitor patch compliance via **SSM Compliance dashboard**  
-
-> Neglect this, and you’ll fall behind on kernel updates, SSH flaws, SSL bugs, and more.
-
----
-
-## Pricing Model (Security-Relevant)
-
-| Component           | Cost                                                                 |
-|---------------------|----------------------------------------------------------------------|
-| EC2 instance hours  | Billed per second or hour                                            |
-| **EBS volumes**     | Charged per GB provisioned + **IOPS** if applicable                 |
-| Inspector scans     | Billed per instance scanned                                          |
-| **SSM usage**       | Free for most, some features (like advanced inventory) are billed    |
-| **CloudWatch Logs** | Charged by ingestion and storage                                     |
-| **GuardDuty**       | Charged by **VPC** flow log volume, **DNS**, **CloudTrail** events  |
-
-> So yeah — a **poorly secured EC2** that’s logging too much, running scans 24/7, and getting hammered by attackers can cost you **more than just the VM.**
-
----
-
-## Snowy Real-Life Scenario
-
-**BlizzardFinance** spins up an EC2 for an RDS migration tool.
-
-It has:
-
-- An **IAM** role with `rds:*`, `s3:*`, and `kms:*`  
-- SSH open to `0.0.0.0/0` “for quick debugging”  
-- **CloudWatch** Agent not configured  
-- No patching  
-- A leftover key from a **dev** that quit last month  
-
-**Within a week:**
-
-- The instance gets brute-forced  
-- The attacker installs a backdoor and scripts to enumerate S3 buckets  
-- The **IAM** role grants access to snapshots from `blizzard-prod-audit`  
-- They **exfil** sensitive audit logs via HTTPS  
-
-**Blizzard** only finds out because of a **GuardDuty** finding, triggered too late.
-
-**Lesson?** EC2 is **dangerous if neglected**, and AWS doesn’t hold your hand once it boots.
-
----
-
-## Final Thoughts
-
-You don’t “set and forget” EC2.  
-You babysit it. You harden it. You rotate keys. You scan **AMIs**. You monitor roles. You restrict ports. You patch. You log. You tag. You restrict outbound traffic. You treat every instance like it’s already compromised.
-
-Because one day, it might be.
+# Amazon EC2 Security
+
+Amazon EC2 gives you virtual machines: pick an AMI, an instance type, and a VPC, and AWS boots the instance. The security consequence is the shared-responsibility line. AWS owns the hypervisor, hardware, and facility; you own everything inside the guest, the OS and patches, the IAM role it carries, the keys, the firewall rules, the software, and the logging. Nothing inside the instance is secured for you by default. The thing to hold onto: an EC2 instance is a bundle of an identity (its role), a network position (its ENIs and security groups), and a metadata endpoint, and almost every EC2 exam scenario is really asking you to shrink the blast radius of one of those three when the box is compromised.
+
+## How it works
+
+- **Instance role and profile.** An instance assumes an IAM role at boot via an **instance profile**. Least privilege per purpose, never `s3:*`/`kms:*`/`ec2:*`, always resource-scoped. Restrict `iam:PassRole` so pipelines cannot attach an over-broad role, and watch role-credential retrieval in CloudTrail.
+- **IMDSv2.** The instance metadata service hands out the role's credentials. IMDSv1 is a plain GET, so an **SSRF** flaw lets an attacker fetch those credentials (the Capital One 2019 pattern). **IMDSv2** requires a session token via PUT and honors a hop limit. Enforce `http_tokens=required`, set **hop limit = 1** so a container cannot reach the host's metadata, and set the **account-level IMDS default** (per Region) so new launches are IMDSv2-only. Enforce it org-wide and non-overridable with an Organizations **declarative policy** (`http_tokens_enforced`). Watch the `MetadataNoTokenRejected` CloudWatch metric for lingering IMDSv1 callers.
+- **Host access.** Prefer **SSM Session Manager**: no inbound port 22, IAM-based auth, full session logging to CloudWatch/S3, CloudTrail auditing. Otherwise EC2 Instance Connect with ephemeral keys. Remove standing `authorized_keys`, restrict source IPs, and lock the **EC2 Serial Console** (a bare-metal/Nitro troubleshooting path abused to bypass network monitoring).
+- **Network.** **Security groups** are stateful, allow-only, applied at the ENI; default egress is open. **NACLs** are stateless, allow and deny, ordered, applied at the subnet. Scope SGs per workload, reference other SGs instead of CIDRs, deny broad inbound, restrict egress to required destinations, alert on any `0.0.0.0/0` ingress or egress.
+- **AMI hygiene.** Launch from hardened golden AMIs (CIS/Inspector-scanned, no embedded secrets, root SSH login off), build them from version-controlled Packer/Ansible, tag with owner and patch status, and restrict which AMIs can be used with the **Allowed Images** declarative policy.
+- **Encryption.** Enable **EBS encryption by default** at the account/Region level so every new volume and snapshot copy is encrypted regardless of the source AMI or automation. Block public EBS snapshot sharing (declarative policy).
+- **Monitoring.** Instances are a black box until you add the **CloudWatch Agent** (metrics and OS logs like `/var/log/secure`), **SSM Agent** (commands, patching, sessions), **Inspector** (OS and app CVE scanning), and **GuardDuty** (crypto-mining, port scans, credential exfiltration, anomalous traffic). These are opt-in.
+- **Patching.** EC2 is not patched for you. **SSM Patch Manager** with patch baselines, `PatchGroup` tags, and maintenance windows, tracked on the SSM compliance dashboard.
+
+## Security groups vs NACLs (the recurring EC2 network split)
+
+| | Security group | Network ACL |
+|---|---|---|
+| State | Stateful (return traffic auto-allowed) | Stateless (must allow both directions) |
+| Rules | Allow only | Allow and deny |
+| Scope | ENI / instance | Subnet |
+| Evaluation | All rules, most-permissive | Numbered order, first match |
+| Default egress | Open | Allow all (default NACL) |
+| Best for | Per-workload allow-listing | Coarse subnet-wide deny (e.g. block a CIDR) |
+
+## What gets tested
+
+- **IMDSv2 defeats SSRF credential theft.** "App was tricked into fetching its own role credentials" or any Capital-One-style SSRF is answered by enforcing IMDSv2 and hop limit 1, not by tightening the security group. Know that the account default plus a declarative policy makes it non-overridable org-wide.
+- **Session Manager over SSH/bastion.** "Shell access with no inbound ports, no key management, and an audit trail" is SSM Session Manager. A bastion + SSH still needs an open port and does not log keystrokes by default.
+- **Instance profile scope is the blast radius.** A compromised instance can do exactly what its role allows. The fix for over-reach is a scoped role plus `iam:PassRole` control, not a network change.
+- **SG vs NACL selection.** Per-instance allow-listing and SG-to-SG references are security groups. "Block this specific malicious CIDR across a whole subnet" is a NACL deny rule, which SGs cannot express.
+- **EBS default encryption is preventative.** Enforcing at rest for all new volumes is the account/Region **encryption by default** setting (and Config `encrypted-volumes` to detect drift), which also covers volumes from an unencrypted source AMI.
+- **Declarative policies for durable EC2 posture.** IMDSv2 default, blocked public snapshots, allowed images, serial console, and VPC block-public-access are enforced as non-overridable org defaults via declarative policies, distinct from an SCP that denies an API call. Recognize declarative policy as the "stays enforced even as new accounts/instances appear" answer.
+- **Detection is opt-in.** A "no alarm fired" scenario usually means CloudWatch Agent, Inspector, and GuardDuty were never enabled. The remediation is enabling them, since EC2 emits almost nothing security-relevant on its own.
+
+## Limitations
+
+- The account-level IMDS default and instance-launch settings can be overridden per instance; only the Organizations **declarative policy** makes IMDSv2 truly non-overridable. An account default alone is not fully preventative.
+- Security groups cannot deny. If the requirement is an explicit block (a bad CIDR, a compromised range), that is a NACL or a firewall, not an SG.
+- GuardDuty and Inspector detect, they do not prevent. They shorten time-to-detection but the exploit still runs; prevention is hardening, least privilege, and IMDSv2.
+- Patch Manager and the CloudWatch/SSM agents must be installed and scheduled before an incident. Absent agents mean no patch compliance and no forensics, and none of it is on by default.
+- EBS default encryption applies only to new volumes and snapshot copies, not existing ones. Turning it on does not retroactively encrypt what is already there.
+- Immutable replacement (destroy and rebuild from a golden AMI in an ASG) is the containment pattern for a compromised instance, but it assumes state is externalized; a stateful box loses data if simply rebuilt.

@@ -1,158 +1,46 @@
-# Amazon VPC (Virtual Private Cloud)
+# Amazon VPC
 
-## What Is It
+Amazon VPC is a logically isolated virtual network in AWS where you define IP ranges, subnets, routing, internet access points, and firewall layers. Every EC2, RDS, in-VPC Lambda, container task, and interface endpoint lives inside a VPC. It is not just addressing, it is the security perimeter and the segmentation layer: it decides what is public versus private, who can talk to whom, whether a resource reaches the internet, and how traffic flows across accounts and Regions. The thing to hold onto: the network is software-defined and open only where you route it, so VPC security is layered controls (route tables, security groups, NACLs, endpoints, flow logs) plus newer authoritative guardrails like VPC Block Public Access, and the exam tests both north-south exposure and east-west segmentation, not just the perimeter.
 
-Amazon **VPC** (Virtual Private Cloud) lets you provision a **logically isolated section of the AWS cloud** where you define your own IP ranges, **subnets**, routing rules, internet access points, and firewall layers. It’s the **foundation of all modern AWS architecture**.
+## How it works
 
-Every EC2, RDS, Lambda (in **VPC**), container task, or internal endpoint you create lives **inside a VPC**.
+- **CIDR and subnets.** A VPC owns an IP range (`10.0.0.0/16`); subnets carve it into zonal, tiered segments. A subnet is public only if its route table sends `0.0.0.0/0` to an internet gateway; otherwise it is private. Plan CIDRs to avoid overlap and exhaustion.
+- **Routing.** Route tables decide a packet's fate (local, IGW, NAT, egress-only IGW, peering, TGW, endpoint). Routing, not naming, determines public versus private.
+- **Layered firewalls.** **Security groups** are stateful, allow-only, at the ENI. **NACLs** are stateless, allow and deny, at the subnet. They stack for defense in depth; a packet must pass both.
+- **Private service access.** Gateway endpoints (S3/DynamoDB) and interface endpoints (PrivateLink) reach AWS services without the internet, and bucket/endpoint policies can require the endpoint.
+- **Connectivity.** VPC peering (1:1, non-transitive), Transit Gateway (hub-and-spoke, transitive, segmented route tables), Site-to-Site VPN (IPsec to on-prem), Direct Connect (private fiber, optional MACsec).
+- **VPC Block Public Access (BPA).** An account/Region authoritative declarative control that blocks internet traffic through IGWs and egress-only IGWs regardless of route tables or security groups. Modes: **bidirectional** (block all internet) or **ingress-only** (allow NAT/EOIGW egress, block inbound), with per-VPC or per-subnet **exclusions** (max 50/account). Supersedes other settings and can be enforced org-wide via declarative policy; SGs and NACLs still apply to excluded resources.
+- **Network Access Analyzer.** Evaluates actual network paths (across SGs, NACLs, route tables, peering, TGW, endpoints, ELB) to find unintended internet or cross-segment reachability, the impact-analysis tool before enabling BPA.
+- **VPC Encryption Controls.** A per-VPC control that can monitor or enforce in-transit encryption, flagging `cleartext` flows (billed hourly since March 2026 after a free intro period).
+- **VPC Flow Logs.** Capture accepted/rejected traffic metadata at VPC, subnet, or ENI level to CloudWatch, S3, or Kinesis, feeding GuardDuty and investigations.
 
-But **VPC** isn’t just about IP addresses. It’s your **security perimeter**. It determines:
+## VPC security controls at a glance
 
-- What’s public vs private
-- Who can talk to whom
-- Whether a service can reach the internet or stay internal
-- How network traffic flows between AWS accounts, services, and even Regions
+| Control | Layer | Job |
+|---|---|---|
+| Route tables | Routing | Public vs private, path selection |
+| Security groups | ENI, stateful | Per-resource allow-listing |
+| NACLs | Subnet, stateless | Subnet-wide allow/deny, block CIDRs |
+| VPC endpoints | Service access | Private AWS-service reach, no internet |
+| VPC Block Public Access | Account/Region | Authoritative "no internet" guardrail |
+| Network Access Analyzer | Analysis | Find unintended reachability paths |
+| VPC Flow Logs | Observability | Traffic metadata for detection/audit |
 
-### Why this matters for security:
+## What gets tested
 
-In AWS, the network is **software-defined** — so if you don’t explicitly lock it down, **you’re open**. A public EC2 with port 22 open, a **misrouted** NAT gateway, or a wide-open Security Group can expose sensitive resources instantly.
-**VPC** gives you the blueprint to **segment, restrict, monitor, and audit** your cloud traffic — before attackers find the gaps.
+- **Public vs private is routing.** A subnet is public only because a route sends `0.0.0.0/0` to an IGW. "Private resources are internet-reachable" is a misrouted table, and the authoritative fix is **VPC Block Public Access**, not just editing each route table.
+- **BPA as the org-wide guardrail.** To centrally guarantee no VPC can reach the internet regardless of local config, use VPC BPA (bidirectional or ingress-only) with narrow subnet exclusions, deployed via declarative policy across the org. This is stronger than auditing route tables and is the "prevent public exposure everywhere" answer.
+- **East-west matters, not just north-south.** Segmentation between tiers and VPCs (private subnets, separate VPCs per environment, TGW route-table domains, SG-to-SG references) contains lateral movement after a breach. Flat networks are the finding.
+- **SG vs NACL.** Per-resource allow-listing is a security group; subnet-wide deny or blocking a CIDR is a NACL. SGs cannot deny.
+- **Private service access to stop exfil.** Reaching S3/DynamoDB/Secrets Manager without the internet is VPC endpoints, plus `aws:SourceVpce` on the bucket policy to prevent data leaving to the public internet.
+- **Network Access Analyzer for reachability proof.** "Prove nothing unintended can reach the internet / this database" is Network Access Analyzer, which evaluates the combined effect of SGs, NACLs, routes, and peering rather than manual review.
+- **Flow Logs for detection and audit.** Absence of Flow Logs means no network forensics; enable at subnet/ENI level and feed GuardDuty. This is the standard "we had no visibility into the traffic" remediation.
 
----
+## Limitations
 
-## Cybersecurity Analogy
-
-Think of AWS as a giant city. A **VPC** is like renting your own gated neighborhood within it.
-
-- You choose the layout (**subnets**)
-- You control who comes in or out (**NACLs**, route tables)
-- You assign guards to each house (Security Groups)
-- You decide if some homes get internet access (Internet Gateway)
-- You can even tunnel to another city (**VPC Peering** or **VPN**)
-
-And just like in the real world, the **hardest attacks to detect happen after someone is already inside** — which makes your **internal boundaries inside the VPC** just as important as your public gates.
-
----
-
-## Real-World Analogy
-
-Imagine a corporate office campus.
-
-- The **VPC** is the entire fenced-off property.
-- **Subnets** are the buildings: public ones have visitor access, private ones don’t.
-- **Security Groups** are the guards at the door — checking who gets in and out.
-- **Route tables** are the campus maps that decide how employees travel between buildings.
-- **NAT Gateways** are exit-only turnstiles: employees can leave, but guests can’t come in through them.
-
-> The point isn’t to make the campus invisible. The point is to **control every connection and log every pathway**.
-
----
-
-## Core Components of a VPC
-
-| **Component**                | **Description**                                                                |
-|-----------------------------|--------------------------------------------------------------------------------|
-| **CIDR Block**              | Defines the IP range (e.g., 10.0.0.0/16)                                       |
-| **Subnets**                 | Split the **VPC** into smaller segments — public/private, zonal, tiered        |
-| **Route Tables**            | Determine where packets go (local, **IGW**, NAT, peering, **TGW**, etc.)       |
-| **Internet Gateway (IGW)**  | Enables public internet access (required for public-facing EC2s)               |
-| **NAT Gateway / NAT Instance** | Allows outbound internet for private **subnets**                            |
-| **Security Groups**         | **Stateful**, instance-level firewalls                                         |
-| **Network ACLs**            | Stateless, **subnet-level** firewalls                                          |
-| **VPC Flow Logs**           | Capture traffic metadata for analysis and detection                            |
-| **VPC Peering**             | Connects two **VPCs** directly                                                 |
-| **Transit Gateway**         | Hub-and-spoke routing across **VPCs** and **on-prem**                          |
-| **Endpoints** (Gateway or Interface) | Private access to AWS services without public internet               |
-
----
-
-## Network Flow Example
-
-Let’s say a user uploads a file to **Snowy’s** app at `https://app.snowysec.com`:
-
-1. The request hits **CloudFront**, which routes to an **ALB** in a **public subnet**
-2. ALB forwards to **EC2 instances** in a **private subnet**
-3. EC2 stores metadata in **DynamoDB via VPC endpoint**
-4. EC2 uploads file to **S3 over PrivateLink**
-5. All outgoing traffic to software updates flows via a **NAT Gateway**
-6. **VPC Flow Logs** capture all metadata for audit and **GuardDuty** analysis
-
-> Every step flows **through the VPC**, governed by **routing tables**, **SGs**, and **NACLs** — no public exposure unless explicitly allowed.
-
----
-
-## Security Use Cases and Controls
-
-| **Use Case**                        | **VPC Component Used**                                                     |
-|-------------------------------------|-----------------------------------------------------------------------------|
-| Lock down internal services         | Private **subnets**, no **IGW**, **SGs** restrict inbound                   |
-| Allow EC2 to reach the internet     | NAT Gateway in public **subnet**                                           |
-| Log all traffic in/out of a subnet  | **VPC Flow Logs** enabled at **subnet/ENI** level                          |
-| Enforce no public access            | **NACL** blocks 0.0.0.0/0 on ingress                                        |
-| Isolate workloads per environment   | Separate **VPCs** for dev, test, prod                                       |
-| Prevent S3 bucket from internet access | Gateway endpoint + deny `aws:SourceIp ≠ VPC` in policy                 |
-| Secure hybrid access                | Site-to-Site **VPN** or **Direct Connect** + **TGW**                       |
-
----
-
-## Inter-VPC & Hybrid Connectivity
-
-| **Method**            | **Purpose**                                    | **Notes**                                                |
-|-----------------------|------------------------------------------------|----------------------------------------------------------|
-| **VPC Peering**       | One-to-one private comms between **VPCs**      | No transitive routing; must manage **SGs** manually       |
-| **Transit Gateway**   | Central hub to connect multiple **VPCs** & VPNs| Scalable, transitive routing, route domains              |
-| **Site-to-Site VPN**  | Connects **VPC** to **on-prem** data center    | **IPsec** tunnel, encrypted                              |
-| **Direct Connect**    | Dedicated fiber to AWS                         | Optional **MACsec**, high throughput, low latency        |
-| **VPC Endpoints**     | Private access to AWS services (S3, DynamoDB)  | Keeps traffic off the internet                           |
-
----
-
-## Real-Life Example: SnowySec Multi-Tier Network
-
-**Snowy’s** architecture is split into **3 VPCs**:
-
-1. **App VPC** — Public + Private **subnets**
-   - Public **subnet**: ALB + Bastion
-   - Private **subnet**: ECS tasks, Lambda, NAT Gateway
-   - **PrivateLink** endpoints to S3, Secrets Manager
-
-2. **Data VPC** — No **IGW**, completely internal
-   - Hosts Aurora PostgreSQL, **ElastiCache**, and **OpenSearch**
-   - Only reachable via **TGW** and strict **SGs**
-
-3. **SOC VPC** — Centralized detection & logging
-   - Runs **GuardDuty**, **Macie**, Security Hub, ELK stack
-   - **VPC Flow Logs** from other **VPCs** mirrored here via centralized logging
-
-> All **VPCs** connect through a **Transit Gateway**.
-> Traffic between **VPCs** is routed through inspection points, with **VPC Flow Logs**, **GuardDuty**, and **NACLs** acting as **tripwires**.
-
----
-
-## Pricing Model
-
-| **Item**                   | **Cost Notes**                                                             |
-|----------------------------|----------------------------------------------------------------------------|
-| **VPC**, **Subnets**, Route Tables | Free                                                           |
-| **NAT Gateway**            | ~$0.045/hr + $0.045/GB                                                    |
-| **VPC Peering**            | Charged for cross-AZ or cross-region data transfer                        |
-| **Transit Gateway**        | ~$0.05 per attachment/hour + per GB data transfer                         |
-| **Endpoints (Interface)**  | ~$0.01/hr per AZ + per GB (depends on service)                            |
-| **Flow Logs**              | Charged by destination (**CloudWatch Logs** or **S3**) + ingestion fees    |
-
----
-
-## Final Thoughts
-
-**VPC** is your **cloud perimeter**, your **segmentation layer**, your **guardrail system**.
-Everything inside AWS lives in a **VPC** — which means **security starts here**.
-
-But don’t treat your **VPC** like a dumb pipe. Design for:
-
-- **Explicit access** over implicit trust
-- **Private by default**, public by exception
-- **East-west boundaries**, not just north-south
-- **Logging and observability** at the **ENI** and **subnet** level
-- **Multi-account, multi-VPC architectures** connected through centralized control points
-
-> Because once an attacker lands inside your **VPC** — **you better hope you built more than just one wall.**
+- The network is open where you route it. A single misconfigured route or `0.0.0.0/0` security-group rule can expose a resource regardless of other controls, which is why BPA exists as an authoritative override.
+- Security groups cannot deny and NACLs are stateless and coarse; neither inspects payloads. Application-layer and domain filtering need WAF, Network Firewall, or DNS Firewall.
+- VPC BPA blocks internet-gateway paths but SGs and NACLs still apply to excluded resources, and detaching the declarative policy rolls back to the prior state, so rollback must be planned. Exclusions are capped (50/account).
+- Flow Logs, Network Access Analyzer runs, endpoints, NAT, TGW, and Encryption Controls all carry cost or effort and are opt-in; a VPC with none of them is a black box.
+- Peering is non-transitive and full-mesh; scaling many VPCs or centralizing inspection/egress is a Transit Gateway pattern, not peering.
+- VPC boundaries do not stop an attacker already inside. Segmentation, least-privilege SGs, endpoint policies, and monitoring are what limit blast radius past the first wall.

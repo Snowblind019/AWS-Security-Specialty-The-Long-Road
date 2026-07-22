@@ -1,128 +1,42 @@
 # AWS VPN
 
-## What Is AWS VPN
+AWS VPN securely connects an on-premises network, data center, or another cloud to an Amazon VPC over the public internet using **encrypted IPsec tunnels**. It is the fast path to hybrid connectivity: extend the corporate network into AWS, route selected traffic through AWS, or provide a redundant backup for Direct Connect. There are two families: **Site-to-Site VPN** (network-to-VPC) and **Client VPN** (individual user devices to AWS). The thing to hold onto: a VPN protects data in transit between the two endpoints, nothing more, so its security value is the encrypted tunnel plus routing and segmentation you layer on, and the exam tests IPsec/IKE tunnel options, the CGW/VGW/TGW roles, Site-to-Site vs Client VPN, and where VPN beats or backs up Direct Connect.
 
-**AWS VPN** allows you to securely connect your **on-premises network, data center**, or even other cloud environments to your **Amazon VPC** using an **encrypted IPsec tunnel** over the internet.
+## How it works
 
-It’s part of a **hybrid cloud architecture**, enabling secure, scalable communication between cloud and **on-prem** infrastructure. You typically use it to:
+- **Endpoints.** A **Customer Gateway (CGW)** represents your on-prem device or software (Cisco ASA, Palo Alto, pfSense). The AWS side terminates on a **Virtual Private Gateway (VGW)** (single VPC) or a **Transit Gateway (TGW)** (many VPCs, and required for accelerated VPN).
+- **Tunnels.** Each Site-to-Site connection provides **two tunnels** in independent availability zones for HA. Traffic uses IPsec (ESP) with **IKEv1 or IKEv2** (IKEv2 is the stronger default). NAT traversal moves the session from UDP 500 to UDP 4500 when NAT is detected.
+- **Crypto options.** Configurable per tunnel: AES-128/256, SHA-1/SHA-2, and Diffie-Hellman groups (2, 14-18, 22-24). Harden by removing weak defaults (drop IKEv1, AES-128, SHA-1, DH2). Dead Peer Detection controls tunnel teardown.
+- **Routing.** Static routes or **BGP dynamic routing**. BGP enables automatic failover across the two tunnels and, on a VGW, site-to-site transit via **VPN CloudHub**.
+- **Authentication.** Site-to-Site uses a **pre-shared key** by default, or **certificate-based** IKE auth via an ACM Private CA subordinate CA (which also removes the need to pin the CGW's IP). Client VPN authenticates users via **Active Directory, SAML/federation, or mutual certificates**, with authorization rules per network.
+- **Accelerated Site-to-Site VPN.** Uses **Global Accelerator** to pull tunnel traffic onto the AWS edge for better performance. It requires **Transit Gateway**, uses separate tunnel IPs, has NAT-T enabled, and is not available over public Direct Connect VIFs.
+- **Segmentation and monitoring.** Prefix filtering controls which routes are advertised in/out; route tables, security groups, and NACLs limit what on-prem can reach once inside; CloudWatch tunnel-state alarms, Site-to-Site VPN logs, VPC Flow Logs, and GuardDuty provide visibility.
 
-- Extend your internal corporate network to the cloud
-- Route specific traffic through AWS
-- Support **failover** connectivity when **Direct Connect** is down
+## VPN options compared
 
-In security-sensitive **orgs** like **SnowyCorp**, AWS VPN is the *secure pipe* — the layer that makes sure **data-in-transit is encrypted, auditable, and protected from interception.**
+| | Site-to-Site VPN | Client VPN | Accelerated S2S VPN |
+|---|---|---|---|
+| Connects | On-prem/other cloud to VPC | User devices to AWS | On-prem to VPC via edge |
+| Protocol | IPsec (IKEv1/2) | OpenVPN (TLS) | IPsec over Global Accelerator |
+| AWS endpoint | VGW or TGW | Client VPN endpoint | TGW only |
+| Auth | PSK or certificate | AD / SAML / mutual cert | PSK or certificate |
+| HA | 2 tunnels | Managed endpoint | 2 tunnels, edge-optimized |
 
----
+## What gets tested
 
-## Cybersecurity Analogy
+- **VPN vs Direct Connect (and as its backup).** VPN is quick, encrypted, internet-based, and cheaper for low bandwidth; use it for migration bridges, dev/test, DR, and initial connectivity. Direct Connect is private fiber with consistent low latency for production, and DX is **not encrypted by default**, so pairing DX with an IPsec VPN is how you get a private *and* encrypted path. VPN is also the standard **Direct Connect failover**.
+- **VGW vs TGW termination.** Single VPC to on-prem terminates on a **VGW**. Many VPCs, transit routing, or **accelerated VPN** requires a **TGW**. VGW site-to-site transit needs BGP (CloudHub); static does not transit.
+- **Two tunnels for HA.** Every connection has two tunnels; real resilience uses BGP so failover is automatic. A single-tunnel design is the availability gap.
+- **Site-to-Site vs Client VPN.** Network-to-network is Site-to-Site (IPsec). Individual remote user laptops are **Client VPN** (OpenVPN/TLS) with AD/SAML/cert auth and per-user authorization rules.
+- **Encryption and IKE hardening.** VPN is the answer when the requirement is "encrypt data in transit to on-prem." Harden by enforcing IKEv2, AES-256, SHA-2, and strong DH groups, and by dropping the weaker defaults.
+- **Certificate auth to drop IP pinning.** When the CGW has a dynamic IP, certificate-based IKE auth (ACM Private CA) removes the fixed-IP requirement of PSK.
+- **Segment what on-prem can reach.** Prefix filters plus route tables, SGs, and NACLs bound the blast radius so a compromised on-prem network cannot reach the whole VPC. VPN gives the pipe, not the segmentation.
 
-Think of AWS VPN as your **company’s armored convoy** driving across the open internet.
-Instead of sending unencrypted packets across the Wild West, you're bundling everything up in a **military-grade transport truck**, slapping encryption on it, and driving it through hostile territory with **secure keys and strong authentication**.
+## Limitations
 
-The tunnel doesn’t protect what happens once it’s inside either end — it protects **everything in transit** from prying eyes and packet sniffers.
-
-## Real-World Analogy
-
-Let’s say Blizzard runs a data center in Spokane and wants to migrate workloads to a **VPC** in us-west-2.
-
-Instead of moving everything to the cloud at once (risky), they start routing certain workloads (like backups, identity federation, log aggregation) through a **VPN tunnel** — gradually building trust and visibility in the cloud.
-
-As they scale, they might move to **Direct Connect** for performance, but VPN is the **first secure bridge** between home base and cloud frontier.
-
----
-
-## How It Works
-
-There are **two core components** involved:
-
-| Component                              | Description                                                                 |
-|----------------------------------------|-----------------------------------------------------------------------------|
-| **Customer Gateway (CGW)**             | Your *on-premise device* or software client. It’s the initiator of the tunnel (e.g., Cisco ASA, Palo Alto, pfSense, etc.) |
-| **Virtual Private Gateway (VGW)** or **Transit Gateway (TGW)** | AWS-side component that terminates the VPN connection inside your **VPC**. |
-
-Once configured:
-
-- An **IPsec tunnel** is established (you can have 2 for redundancy)
-- **Routing** is set up using either static or **BGP dynamic routing**
-- You define **which prefixes** are allowed in/out
-- Optional **CloudWatch alarms**, **Flow Logs**, and **NACLs** can monitor and secure the setup
-
----
-
-## Types of AWS VPN
-
-| Type                                | Description                                                                 |
-|-------------------------------------|-----------------------------------------------------------------------------|
-| **Site-to-Site VPN**                | Connects your **on-prem** network or another cloud provider to your **VPC** using **IPsec** tunnels |
-| **Client VPN (OpenVPN)**            | Lets users connect to AWS securely over **OpenVPN** protocol from laptops, mobile devices |
-| **CloudHub (Multi-site over VGW)**  | Connects multiple remote networks to the same **VGW** using **BGP**        |
-| **Accelerated VPN (Global Accelerator)** | Uses AWS edge locations to optimize VPN traffic performance (premium setup) |
-
----
-
-## Security Architecture Relevance
-
-| Security Feature       | Details                                                                 |
-|------------------------|-------------------------------------------------------------------------|
-| **Encryption in Transit** | **IPsec** tunnels with AES-256 or stronger ciphers                   |
-| **Authentication**        | **Pre-shared key (PSK)** by default; supports certificate-based **auth** (for Client VPN) |
-| **High Availability**     | Two tunnels per VPN connection; supports route **failover**          |
-| **Auditability**          | Fully integrated with **VPC Flow Logs**, **CloudTrail**, **GuardDuty** |
-| **Access Control**        | Combine with **Security Groups**, **NACLs**, **IAM** to restrict access inside the **VPC** |
-| **Blast Radius Control**  | Use **route tables + network segmentation** to limit what **on-prem** can access |
-| **Cost Predictability**   | Priced per connection per hour + data transfer                        |
-
----
-
-## When to Use AWS VPN
-
-**Use when:**
-
-- You need **quick, secure hybrid connectivity**
-- You're migrating workloads from **on-prem** and need a **bridge**
-- You want a **redundant backup** for Direct Connect
-- You need secure user-level remote access (Client VPN)
-
-**Don’t use when:**
-
-- You need **low-latency, high-throughput** connections (use Direct Connect)
-- You **don’t trust the internet at all** (use **DX** with **MACsec** or **MPLS**)
-
----
-
-## SnowyCorp Example
-
-Snowy sets up:
-
-- Two **Site-to-Site VPN tunnels** from their **NOC** to a **VGW** in AWS us-west-2
-- **BGP routing** to allow dynamic **failover**
-- **Prefix filters** to only allow 10.10.0.0/16 and block internal **subnets**
-- **CloudWatch** alarms on tunnel state and **VPC Flow Logs** for auditing
-- **GuardDuty** to detect unusual cross-tunnel behavior
-- Later, they add **Client VPN** for remote engineers to access AWS **dev** environment
-
-The VPN isn’t just a pipe — it’s **instrumented, segmented, monitored, and revocable**.
-No trust by default. Snowy-style.
-
----
-
-## Pricing Summary
-
-| Feature                 | Pricing Model                                                  |
-|-------------------------|----------------------------------------------------------------|
-| **Site-to-Site VPN**    | Per hour per connection + data out                            |
-| **Client VPN**          | Per active client connection/hour + hourly endpoint fee       |
-| **Accelerated VPN**     | Additional charges for Global Accelerator usage               |
-
----
-
-## Final Thoughts
-
-VPN is **step 1** in hybrid security.
-But just setting up a tunnel isn’t enough — you have to:
-
-- Define what routes go where
-- Monitor everything crossing it
-- Segment access once inside AWS
-
-If the cloud is your new data center, then VPN is the **drawbridge** — secure, but only if you control *who’s crossing, what they’re carrying, and where they go once inside*.
+- A VPN encrypts only the transit between endpoints; it does not protect data or control access once traffic is inside either network. Segmentation and IAM still apply.
+- Throughput and latency ride the public internet and each tunnel is bandwidth-limited (standard ~1.25 Gbps; a large-bandwidth tunnel option up to ~5 Gbps requires TGW/Cloud WAN). Consistent high-throughput, low-latency needs Direct Connect.
+- Default tunnel options include weak choices (IKEv1, AES-128, SHA-1, DH2). Leaving defaults is a hardening gap; you must prune them.
+- Accelerated VPN only works with Transit Gateway, not a VGW, and not over public Direct Connect VIFs.
+- Static routing gives no automatic failover; without BGP, tunnel loss requires manual intervention, and VGW cannot provide TGW-style multi-VPC transit.
+- Client VPN is billed per active connection plus an hourly endpoint fee and needs authorization rules configured; an open Client VPN with broad rules is as risky as any flat network.

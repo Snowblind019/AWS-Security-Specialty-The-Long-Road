@@ -1,192 +1,46 @@
 # AWS Global Accelerator
 
-## What Is AWS Global Accelerator
-
-AWS Global Accelerator is a global traffic steering service designed to improve the performance, availability, and fault tolerance of your internet-facing applications. It does this by routing your users through the AWS global network instead of the unpredictable public internet.
-
-When you deploy applications in multiple AWS Regions (e.g., one in Oregon and another in Frankfurt), Global Accelerator:
-
-- Provides static IP addresses to act as a stable entry point  
-- Uses Anycast routing to bring user traffic into the nearest AWS edge location  
-- Forwards that traffic across the AWS global fiber backbone to your application’s endpoint in the optimal Region  
-- Automatically detects and fails over to healthy endpoints in case of failures  
-
-It’s ideal when you need fast, consistent performance for global users and can’t rely on DNS or the latency of public ISPs.
-
----
-
-## Cybersecurity Analogy
-
-Think of your AWS Regions as data centers guarded by highly trained security teams.  
-Now imagine people around the world trying to send messages to your application.
-
-- Without Global Accelerator, those messages take random public roads — filled with potholes, slowdowns, and no protection. A message might get delayed, dropped, or intercepted.  
-- With Global Accelerator, you instead give users direct access to your secure private highway — one that's built, maintained, and monitored entirely by AWS.  
-
-Messages enter the nearest AWS entry point, travel across high-speed encrypted lanes, and get delivered quickly to whichever data center is healthy and closest.
-
-From a security standpoint, you’ve just reduced exposure, removed blind spots, and gained end-to-end observability.
-
-## Real-World Analogy
-
-Imagine you're running a chain of warehouses across the world. You ship to customers in dozens of countries.  
-Now you want:
-
-- A single customer support phone number for everyone, no matter their region  
-- Instant redirection of their request to the nearest warehouse  
-- If one warehouse goes offline, calls are automatically rerouted to the next best  
-
-This is what AWS Global Accelerator does — it’s your single, global front door, always directing customers to the best location behind the scenes.
-
----
-
-## How AWS Global Accelerator Works
-
-### 1. Static Anycast IPs
-
-- When you create a Global Accelerator, you’re given **two static IPv4 addresses**.  
-- These IPs are **anycasted** — which means they’re broadcast from all AWS edge locations around the world.  
-- When a user connects to one of these IPs, **BGP (Border Gateway Protocol)** automatically routes the traffic to the nearest AWS edge PoP (Point of Presence).  
-
-You can associate custom domain names (via Route 53 or your DNS provider) with these static IPs.
-
-### 2. AWS Global Network Routing
-
-Once inside the AWS edge, the traffic is routed across AWS's **private, high-speed global backbone** instead of traveling over the unreliable public internet.
-
-This minimizes:
-
-- Latency fluctuations  
-- Packet loss  
-- Congestion-related slowdowns  
-
-It’s the equivalent of giving your traffic access to an **express bullet train** that connects global AWS data centers directly.
-
-### 3. Regional Endpoint Groups
-
-You configure **endpoint groups**, typically per Region.  
-Each group contains one or more endpoints, such as:
-
-- Application Load Balancers (ALBs)  
-- Network Load Balancers (NLBs)  
-- EC2 instances with Elastic IPs  
-- Elastic IPs associated with services  
-
-You can define **traffic weights** to distribute load among endpoints and configure **health checks** so that Global Accelerator can detect and automatically fail over if an endpoint or Region becomes unavailable.
-
-### 4. Failover and Health Monitoring
-
-Global Accelerator continuously monitors the health of your endpoints:
-
-- If an endpoint fails its health checks, traffic is **automatically rerouted** to healthy alternatives — within the same Region or another Region altogether  
-- **No DNS propagation delay**, no manual updates needed  
-- Traffic is shifted instantly, minimizing downtime for users  
-
-This is ideal for **active-passive or active-active** multi-Region architectures.
-
-### 5. Traffic Dialing and Control
-
-You can dial traffic between endpoint groups:
-
-- Set a traffic dial to 0% for one Region if you’re doing maintenance  
-- Send a percentage of traffic to a test Region before full rollout (e.g., 10% to Europe, 90% to US)  
-- Shift all users to a disaster recovery site instantly by dialing traffic to 100% there  
-
-This gives you **real-time traffic orchestration**, unlike traditional DNS which relies on TTL and resolver caching.
-
-### 6. Static IPs for Security and Compliance
-
-In many enterprise environments, static IPs are required to:
-
-- Whitelist traffic through firewalls or VPNs  
-- Meet compliance standards that require fixed ingress points  
-- Integrate with legacy partners or third-party systems  
-
-Without Global Accelerator, using ALBs or NLBs directly results in dynamic IPs.  
-Global Accelerator solves this with **globally consistent IPs** that don’t change — even if your backend infrastructure moves or scales.
-
----
-
-## What Global Accelerator Is (And Isn’t)
-
-| It Is                                                   | It Is Not                            |
-|----------------------------------------------------------|---------------------------------------|
-| A traffic accelerator over AWS's backbone                | A CDN (that’s CloudFront)             |
-| A provider of static IP addresses for global entry       | A DNS resolver (that’s Route 53)      |
-| A way to improve TCP/UDP latency and resiliency          | A firewall or packet inspector        |
-| Region-aware, fault-tolerant routing system              | Not tied to HTTP/S or caching logic   |
-
----
-
-## Key Use Cases
-
-- Global APIs that serve users in North America, Europe, and Asia  
-- Gaming apps needing ultra-low latency and regional failover  
-- SaaS platforms with multi-Region HA and global onboarding  
-- Hybrid networking with predictable ingress IPs  
-- IoT applications with widespread distributed devices  
-- Secure B2B services where partners need static IPs for firewall rules
-
----
-
-## Pricing Model
-
-There are two cost components:
-
-- **Fixed hourly charge per accelerator**  
-  - Example: `$0.025 per hour` = ~$18 per month  
-- **Data transfer out (DTO)** through the accelerator  
-  - Example: `$0.015 per GB` (in addition to normal AWS data transfer)
-
-> **Important:**  
-> This is *in addition* to backend service costs (like ALB, EC2, etc.).  
-> If you're moving huge volumes of media, CloudFront might be more cost-effective.  
-> Global Accelerator is designed for **low-latency, high-resiliency TCP/UDP frontends**, not bulk data delivery.
-
----
-
-## Security Implications
-
-- Supports TLS termination at the backend ALBs/NLBs  
-- Can be used in tandem with **WAF**, **Shield**, and **CloudFront**  
-- Integrates with **Firewall Manager** to apply global security policies  
-- Does **not decrypt traffic** or inspect payloads — it operates at the **transport layer**  
-- Because Global Accelerator does **not expose the origin IP**, it adds a subtle layer of obfuscation against scanning and enumeration.
-
----
-
-## Snowy’s Example: Secure Dashboard Rollout
-
-Snowy deploys a compliance dashboard used by auditors in the U.S., Europe, and Japan.
-
-- The dashboard is hosted in `us-west-2`, `eu-central-1`, and `ap-northeast-1`  
-- Snowy spins up a **Global Accelerator** and maps all traffic to the two static IPs  
-- **Regional failover** is configured automatically via health checks  
-- **Partners whitelist those two IPs** on their internal firewalls  
-- In case of a patch outage in Frankfurt, all traffic shifts to Oregon instantly  
-- **TLS termination** is done at the ALBs, and logs are pushed to **CloudWatch** for visibility  
-
-Snowy gains **reliability, control, security, and visibility** — all while maintaining a **single global entry point** for auditors.
-
----
-
-## Final Thoughts
-
-AWS Global Accelerator is often overlooked but incredibly powerful for workloads requiring **static global entry points**, **fast failover**, and **low-latency routing** across Regions.
-
-It’s *not* a CDN, it’s *not* a DNS service — it’s a **routing optimization layer** that’s laser-focused on **performance**, **uptime**, and **consistency**.
-
-Use it when:
-
-- You need static IPs  
-- Your app serves global users  
-- You want control over where and how users connect  
-- You need to quickly fail over between Regions without DNS delays  
-
-Leave it out if:
-
-- Your use case is focused on HTTP content caching (use CloudFront)  
-- You don't need global static IPs  
-- You're doing internal-only routing (use Route 53 + VPC endpoints)  
-
-For **distributed SaaS**, **multi-player games**, **real-time APIs**, and **compliance-sensitive environments**, Global Accelerator is a **rock-solid backbone** to build on — especially when you value **resilience, performance, and predictability at scale**.
+AWS Global Accelerator is a global traffic-steering service that improves availability, performance, and failover for internet-facing applications by pulling user traffic onto the AWS backbone at the nearest edge instead of routing it over the public internet. It hands you static anycast IPs as a stable front door, then forwards over AWS fiber to the optimal healthy Regional endpoint. The thing to hold onto: Global Accelerator is a Layer 3/4 (TCP/UDP) routing layer, not a CDN and not a firewall. It does not cache, does not terminate TLS, and does not inspect payloads. Its security value is a fixed static-IP ingress, a Shield-protected edge, origin-IP hiding, and instant Region failover without DNS delay.
+
+## How it works
+
+- **Static anycast IPs.** You get two static IPv4 addresses (or bring your own with **BYOIP**), announced from every AWS edge via BGP anycast, so a user's connection enters the nearest PoP. Map a custom domain to them in Route 53. Standard accelerators also support **dual-stack** IPv4/IPv6.
+- **Backbone routing.** From the edge, traffic crosses the AWS private global network to the endpoint, cutting latency variance, packet loss, and congestion versus the public internet. This is transport optimization, not encryption; Global Accelerator does not encrypt the payload.
+- **Endpoint groups.** One group per Region, each holding endpoints (internet-facing ALB, NLB, EC2 with EIP, or Elastic IPs), with per-endpoint **traffic weights** and **health checks**.
+- **Failover.** Continuous health checks reroute traffic to healthy endpoints in the same or another Region automatically, with no DNS TTL or propagation delay. Suits active-active and active-passive multi-Region designs.
+- **Traffic dials.** Per-endpoint-group dial (0 to 100 percent) for maintenance drains, percentage-based canary rollouts, or instant DR cutover, again without DNS caching effects.
+- **Client IP preservation.** For internet-facing ALB, NLB (with security groups), and EC2 endpoints, the backend sees the original client IP rather than the accelerator's, so backend security groups, WAF, and logs can act on the real source.
+- **DDoS protection.** **Shield Standard** is automatic on the accelerator's static IPs. **Shield Advanced** adds resource-specific detection, DRT/SRT access, cost protection, and attack visibility for standard accelerators.
+- **Accelerator types.** **Standard** accelerators route to the optimal endpoint; **custom routing** accelerators deterministically map ranges of ports to specific EC2 instances (VoIP, gaming, virtual desktops).
+- **Observability.** Global Accelerator **Flow Logs** capture traffic records for the accelerator, feeding CloudWatch and SIEM analysis.
+
+## Global Accelerator vs adjacent edge services
+
+| | Global Accelerator | CloudFront | Route 53 |
+|---|---|---|---|
+| Layer | L3/L4 (TCP/UDP) | L7 (HTTP/S) | DNS |
+| Caches content | No | Yes | No |
+| Static ingress IPs | Yes (2, or BYOIP) | No (edge DNS names) | No |
+| Failover mechanism | Health-checked, instant, no DNS wait | Origin failover | DNS with TTL delay |
+| TLS termination | No (at backend) | Yes (at edge) | No |
+| WAF attaches here | No (put on backend ALB/CloudFront) | Yes | No |
+| Best for | Static-IP, low-latency TCP/UDP frontends, fast Region failover | Cacheable HTTP content, edge WAF/TLS | Name resolution and DNS routing policies |
+
+## What gets tested
+
+- **Not a CDN, not a DNS service.** "Cache content at the edge" is CloudFront; "resolve names / latency-based DNS" is Route 53. Global Accelerator is the answer only when the need is static IPs, non-HTTP (TCP/UDP) acceleration, or instant health-based Region failover without DNS TTL.
+- **Static IPs for firewall allow-listing.** When partners must whitelist a fixed set of ingress IPs, or compliance requires stable entry points, Global Accelerator's two static anycast IPs (or BYOIP) are the answer; ALB/NLB IPs are dynamic.
+- **WAF goes on the backend, not the accelerator.** Because Global Accelerator is L4, you cannot attach a WAF Web ACL to it. To inspect L7, put WAF on the internet-facing ALB behind the accelerator, or front the app with CloudFront. A "add SQLi/XSS filtering to my accelerated app" answer targets the ALB/CloudFront.
+- **Shield tiers.** Shield Standard is automatic. Shield Advanced is the paid answer for large/sophisticated DDoS with DRT and cost protection, and Global Accelerator is one of its supported resource types alongside CloudFront, ELB, EC2/EIP, and Route 53.
+- **Client IP preservation for backend controls.** When the backend must see and filter on the true client IP (SG rules, WAF, logging), enable client IP preservation; without it the backend sees the accelerator IP.
+- **Instant failover vs DNS.** "Fail over between Regions without waiting for DNS TTL" is Global Accelerator's health-checked rerouting, distinct from Route 53 failover which is bounded by resolver caching.
+- **Origin-IP obfuscation.** Because clients only ever see the static anycast IPs, backend endpoint IPs are not exposed to scanning or enumeration, a modest hardening benefit.
+
+## Limitations
+
+- No encryption and no payload inspection. Global Accelerator moves TCP/UDP over the backbone but does not add confidentiality; TLS must be terminated at the backend ALB/NLB, and treating "AWS backbone" as "encrypted" is the design error to avoid.
+- No WAF attachment. L7 filtering requires a WAF on the backend ALB or CloudFront; the accelerator itself cannot do content inspection or rate-based application rules.
+- Firewall Manager does not support Shield Advanced policies for standard accelerators (or Route 53 hosted zones), so multi-account Shield automation cannot cover Global Accelerator the way it covers ALB/CloudFront/EC2. Protection has to be applied directly.
+- Not for bulk content delivery. It optimizes latency and resiliency for frontends, but for large media at scale CloudFront is more cost-effective; Global Accelerator adds a fixed hourly charge plus a data-transfer premium on top of backend costs.
+- Two static IPs are a small, fixed ingress set. That is the point for allow-listing, but it also concentrates the entry point, so Shield and backend controls still matter.
+- Health-based failover depends on well-configured health checks. Misconfigured checks either fail to drain an unhealthy Region or flap traffic, so the failover guarantee is only as good as the check definition.

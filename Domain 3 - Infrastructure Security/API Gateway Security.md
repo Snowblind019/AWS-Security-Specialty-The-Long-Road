@@ -1,243 +1,50 @@
 # API Gateway Security
 
-## What Is API Gateway Security
-
-Amazon API Gateway is a fully managed AWS service that allows developers to create, publish, secure, and monitor APIs. It acts as the **front door to backend services** — such as Lambda functions, ECS tasks, EC2, or any external web apps.
-
-The security challenge: API Gateways are **public by default**, exposed to the internet unless you configure them otherwise. That makes them **high-value targets** for attackers who:
-
-- Probe for unauthenticated endpoints  
-- Launch DDoS attacks  
-- Inject malicious payloads (XSS, SQLi, event injection)  
-- Attempt authorization bypasses  
-- Abuse overly permissive CORS settings  
-
-Whether your API is REST, HTTP, or WebSocket-based, **misconfiguring access policies** or leaving things open to the world can lead to full compromise of backend systems.
-
----
-
-## Cybersecurity Analogy
-
-Think of API Gateway as the **reception desk at a corporate building**. It controls who gets to enter, where they go, and what they can say.
-
-If the receptionist:
-
-- Doesn’t check ID (no authentication)  
-- Allows anyone into the executive floor (no authorization)  
-- Doesn’t scan for weapons (no input validation)  
-- Leaves the front door open all night (no throttling)  
-
-— then bad actors walk right in.
-
-## Real-World Analogy
-
-Imagine you're running a **customer support call center**. Everyone has to call a main number (API Gateway), and based on what they say, they're routed to different departments (Lambda, EC2, RDS, etc.).
-Then your phone lines will get flooded, private info may leak, and internal systems can be abused.  
-**API Gateways are the same:** entry control points for your cloud — and without strict rules, they become your weakest link.
-
-
----
-
-## How It Works / What to Secure
-
-### 1. Authentication and Authorization  
-**Control Who Can Access**
-
-
-API Gateway supports several authentication methods:
-
-- **IAM-based Auth**  
-  Clients sign requests with AWS SigV4 (great for internal APIs)
-
-- **Cognito User Pools**  
-  JWT-based auth for web/mobile clients (federated identity, social login)
-
-
-- **Lambda Authorizers (Custom Auth)**  
-  You provide a function that evaluates headers, tokens, etc.
-
-- **API Keys**  
-  Not recommended for auth alone — better for usage tracking
-
-
-**Best Practices:**
-
-- Use **JWT or SigV4** for strong, verifiable auth  
-- Avoid using API Keys as the only layer of security  
-- Apply **per-method authorization** to restrict sensitive operations (e.g., POST vs GET)  
-- Combine with IAM conditions or resource policies (e.g., allow access only from specific VPCs)
-
-### 2. Resource Policies (Per-API)  
-**Control Where Calls Can Come From**
-
-You can attach a **resource policy** to your API Gateway, much like an S3 bucket policy.
-
-**Example use cases:**
-
-- Allow only a specific VPC endpoint to call the API  
-- Block traffic from certain CIDR ranges  
-- Allow only IAM principals from specific AWS accounts  
-
-This adds **network-level access control**, beyond identity.
-
-### 3. Input Validation and Schema Enforcement  
-**Protect the Backend**
-
-Define request models and enforce **strict JSON schemas**:
-
-- Validate required fields  
-- Enforce length, format, patterns  
-- Reject malformed or unexpected payloads before they reach Lambda/EC2  
-
-This blocks:
-
-- Injection attacks  
-- Broken deserialization  
-- Event injection vulnerabilities  
-
-You can use **mapping templates (Velocity Template Language)** to transform/validate data at the gateway.
-
-### 4. Throttling, Rate Limiting, and Usage Plans  
-**Prevent Abuse and DDoS**
-
-Use API Gateway’s built-in throttling controls:
-
-- Default per-method limits (e.g., 1000 RPS, burst of 2000)  
-- Custom usage plans tied to API keys  
-
-- Enforce quotas per client  
-
-This stops:
-
-
-- Credential stuffing  
-
-- Exhaustion attacks  
-
-- Infinite-loop triggers from untrusted clients  
-
-
-For DDoS:
-
-- Use **AWS Shield Standard** (enabled by default)  
-- For high-risk APIs, subscribe to **Shield Advanced**
-
-### 5. HTTPS Enforcement and TLS 1.2+  
-**Secure Data in Transit**
-
-- All API Gateway endpoints use **HTTPS by default**  
-- TLS 1.2 is the **minimum version allowed** (TLS 1.0/1.1 deprecated)  
-- For **private APIs**, use VPC Endpoint connections (PrivateLink) with encryption
-
-Also:
-
-- Don’t allow downgrade attacks by using weak ciphers  
-- Always test your endpoint using tools like **SSL Labs**
-
-### 6. CORS Configuration (Cross-Origin Resource Sharing)  
-**Don’t Expose APIs to Untrusted Frontends**
-
-APIs often serve web clients that live on different domains. **CORS headers** control who can talk to the API.
-
-**Too permissive CORS settings:**
-
-```http
-Access-Control-Allow-Origin: *
-```
-This means any website can make requests — including malicious ones.
-
-**Best practices:**
-
-- Only allow trusted domains  
-- Limit `Access-Control-Allow-Methods`  
-- Don’t expose credentials unless needed
-
-### 7. Logging and Monitoring  
-**Detect Misuse and Investigate Incidents**
-
-- Enable **Access Logging** in API Gateway (send to CloudWatch Logs)  
-- Enable **Execution Logging** (logs full lifecycle of requests)  
-- Trace requests using **AWS X-Ray**  
-- Monitor with **CloudWatch Metrics** (4xx, 5xx errors, latency, etc.)  
-- Correlate with **CloudTrail** to see who deployed or updated APIs  
-- Integrate findings into **Security Hub** or your **SIEM** for visibility
-
-### 8. Private APIs + VPC Links (Optional)
-
-For internal APIs, you can make them completely **private**:
-
-- Use **Private API Gateway** (accessible only through VPC endpoints)  
-- Or set up **VPC Link** to proxy traffic to services inside your VPC (like ALB)  
-
-This removes **internet exposure entirely**.
-
----
-
-## Pricing Models
-
-| Component          | Pricing                                         |
-|--------------------|--------------------------------------------------|
-| REST API (Legacy)  | $3.50/million requests                          |
-| HTTP API (Modern)  | $1.00/million requests (lower cost, less features) |
-| WebSocket API      | Charged per message                             |
-| Data Transfer      | Charged per GB                                  |
-| Caching            | Pay per GB-hour (if enabled)                    |
-| Access Logs        | CloudWatch log ingestion + storage fees         |
-| WAF Rules          | Charged separately per request inspected        |
-
----
-
-## Real-Life Snowy-Style Example
-
-**Blizzard is building an API-driven financial service.**  
-Customers can check their balance, transfer funds, and view transaction history — all via **API Gateway + Lambda + DynamoDB**.
-
-### Mistake Scenario:
-
-- No auth required on `/check-balance`  
-- API key reused across all clients  
-- No rate limiting  
-- Access logs disabled  
-
-**An attacker:**
-
-- Mass-scrapes account data  
-- Floods the Lambda with junk calls (costing $$$)  
-- Steals sensitive data  
-
----
-
-### Snowy Fixes This By:
-
-- Enabling **JWT auth via Cognito**  
-- Attaching **IAM conditions + per-method auth**  
-- Enabling **throttling + WAF rules**  
-- Validating input with **strict JSON schemas**  
-- Logging every request to **CloudWatch + X-Ray**
-
-Now the gateway is **locked down tight**, and abuse is **visible and actionable**.
-
----
-
-## Final Thoughts
-
-**API Gateway is one of the most exposed entry points in AWS.**
-
-It’s critical you treat it like a:
-
-- Firewall  
-- Load balancer  
-- Traffic cop  
-
-Because it **is**.
-
-Your job is to:
-
-- Authenticate and authorize every call  
-- Validate every input  
-- Monitor every request  
-- Rate-limit every client  
-
-When **properly hardened**, API Gateway becomes a powerful, secure abstraction layer.  
-When **neglected**, it becomes your biggest blind spot.
-
+Amazon API Gateway is the managed front door to backend services (Lambda, ECS, EC2, ALB, HTTP endpoints), handling request routing, authorization, throttling, and monitoring so the backend does not have to. The security problem is exposure: a public API Gateway endpoint is internet-facing by default, which makes it a high-value target for unauthenticated-endpoint probing, DDoS, injection, authorization bypass, and CORS abuse. The thing to hold onto: securing API Gateway is layered defense at the edge, identity (who), resource policy (from where), input validation (what), and throttling (how much), and the exam mostly tests which layer solves the stated problem and which API type (REST vs HTTP) even supports the control.
+
+## How it works
+
+- **Authentication and authorization.** Four mechanisms: **IAM / SigV4** (signed requests, internal and service-to-service), **Cognito User Pools** (JWT, web and mobile), **Lambda authorizers** (custom token or request logic, the OAuth/bearer-token path), and **JWT authorizers** (native OIDC/OAuth2, HTTP API only). API keys are for usage tracking and plans, never authentication on their own. Apply authorization per method so a `POST` can be gated harder than a `GET`.
+- **Resource policies.** A JSON policy attached to the API itself, like an S3 bucket policy, controlling the source of calls: restrict to a specific VPC endpoint, an account, or a CIDR range. This is the required mechanism to lock a **private REST API** to its interface VPC endpoint. REST APIs only.
+- **Input validation.** Attach request models with JSON Schema to reject malformed or oversized payloads before they reach the backend. Enforce required fields, length, pattern. Blocks injection and broken-deserialization payloads at the gateway. REST APIs; VTL mapping templates transform and validate.
+- **Throttling, usage plans, quotas.** Account and per-method throttle limits plus burst. Usage plans tie API keys to per-client rate and quota. This is the abuse, credential-stuffing, and cost-exhaustion control. Per-client usage plans are a REST API feature; HTTP APIs do route-level throttling only.
+- **TLS in transit.** HTTPS enforced, minimum **TLS 1.2** (1.2 and 1.3 accepted, 1.0/1.1 rejected). Custom-domain certificates come from ACM. **mTLS** (client certificate validation) is available for B2B and is supported on both REST and HTTP custom domains.
+- **CORS.** `Access-Control-Allow-Origin: *` lets any site call the API. Scope to trusted origins, limit methods, and do not expose credentials unless required.
+- **Private APIs and VPC integration.** A **private REST API** is reachable only through an interface VPC endpoint (no internet path), gated by a resource policy. **VPC Link** proxies to in-VPC targets (NLB for REST, ALB/NLB/Cloud Map for HTTP) without exposing them publicly.
+- **Logging and monitoring.** Access logging and execution logging to CloudWatch Logs, X-Ray tracing, CloudWatch metrics (4xx, 5xx, latency, count), CloudTrail for control-plane changes (who redeployed the API), findings routed to Security Hub or a SIEM.
+- **WAF.** Attach a Web ACL for managed rule groups, rate-based rules, and geo/CIDR blocking. WAF integrates with **REST API stages** and CloudFront, not with HTTP APIs.
+
+## REST API vs HTTP API (the control-coverage split)
+
+| Control | REST API | HTTP API |
+|---|---|---|
+| Price per million | $3.50 | $1.00 |
+| IAM / SigV4 auth | Yes | Yes |
+| Cognito authorizer | Yes | Via JWT authorizer |
+| Native JWT authorizer (OIDC/OAuth2) | No (use Lambda to validate) | Yes |
+| Lambda authorizer | Yes | Yes |
+| Resource policy | Yes | No |
+| API keys + usage plans (per-client quota) | Yes | No |
+| Request validation / mapping templates | Yes | No |
+| WAF integration | Yes | No |
+| Private endpoint | Yes (VPC endpoint + resource policy) | No |
+| mTLS on custom domain | Yes | Yes |
+| Response caching | Yes | No |
+
+## What gets tested
+
+- **Which API type supports the control.** The single most common trap. WAF, resource policies, API keys/usage plans, request validation, private endpoints, and caching are **REST-only**. Native JWT authorizer is **HTTP-only**. If a scenario needs WAF or a per-client quota on an HTTP API, the answer is "use a REST API" or the control does not apply.
+- **Lock down where calls originate.** "Only this VPC / account / CIDR can call the API" is a **resource policy**, not an IAM identity policy and not a security group. Identity answers *who*, resource policy answers *from where*.
+- **Private API vs regional/edge.** Removing internet exposure entirely means a **private REST API** behind an interface VPC endpoint, paired with a resource policy that names that endpoint. VPC Link is the reverse direction: reaching private backends, not hiding the API.
+- **Authorizer selection.** Signed internal calls: IAM/SigV4. Web/mobile users with a JWT: Cognito or a native JWT authorizer. Bespoke token logic or a third-party IdP with custom validation: Lambda authorizer. API keys are never the authentication answer; they are metering.
+- **Throttling as the abuse and cost control.** Flood, credential stuffing, or runaway Lambda spend maps to throttling and usage plans first, Shield/WAF second. Shield Standard is automatic; Shield Advanced is the paid tier for high-risk endpoints.
+- **Input validation stops injection at the edge.** When the concern is malformed or malicious payloads reaching Lambda, the REST API request-validation model is the gateway-layer answer, ahead of backend code changes.
+
+## Limitations
+
+- HTTP APIs are cheaper but drop resource policies, WAF, API keys/usage plans, request validation, and private endpoints. Cost optimization can silently remove a security control you needed; verify the control exists on the type before recommending it.
+- A resource policy restricts source but does not authenticate. It layers over identity auth, it does not replace it. An open method with only a CIDR allow is still unauthenticated within that range.
+- Native JWT authorizers validate the token (signature, claims, expiry) but do not do fine-grained per-resource authorization on their own. Method-level scoping still has to be designed.
+- Execution (full-lifecycle) logging is verbose and expensive at volume. It doubles CloudWatch ingestion cost, so production usually runs access logging plus ERROR-level execution logging, not full logging everywhere.
+- Shield Standard is DDoS protection at the network and transport layer only. Application-layer (L7) flooding and injection still require WAF and throttling; Shield alone is not the answer to a scraping or L7 flood scenario.
+- Caching is a REST-only feature billed continuously by GB-hour regardless of hit rate, so it is a cost lever, not a free security or performance win.

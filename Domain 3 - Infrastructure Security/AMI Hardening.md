@@ -1,180 +1,41 @@
 # AMI Hardening
 
-## What Is the Service
+An Amazon Machine Image (AMI) is the template an EC2 instance is cloned from: OS, installed software, configuration, and baked-in packages. Because every instance inherits the image, an insecure AMI is a scaling vector: one unpatched CVE, one open port, one permissive user, replicated across the whole fleet from first boot. Hardening means locking the image down before it is used, so anything launched from it starts in a secure, production-grade posture instead of being patched into compliance afterward. The thing to hold onto: hardening is a build-time control, not a runtime one. You are securing the mold, not each stamped part, and the exam almost always wants the golden-image pipeline over per-instance remediation.
 
-An **Amazon Machine Image (AMI)** is a preconfigured template used to launch EC2 instances.  
-It includes the operating system, installed software, custom configurations, and environment-specific packages.  
-Basically, it’s the blueprint from which your servers are cloned.
+## How it works
 
-But here’s the catch:  
-If your AMI is **insecure**, every instance launched from it **inherits those vulnerabilities** — misconfigurations, old libraries, unpatched exploits, open ports, permissive users. This becomes a **scaling vector for risk**.
+- **Start from a trusted base.** Amazon Linux 2023, Ubuntu LTS, RHEL, or a Marketplace CIS pre-hardened base image. Not random community AMIs, which are an unvetted supply-chain risk.
+- **Apply the hardening layer.** Disable unused services, ports, and users; enforce file permissions, auditd/journald logging, and SELinux or AppArmor. In a pipeline this is an AWSTOE component (a YAML build step), or an AWS-managed **CIS Level 1** or **STIG** hardening component so you are not maintaining custom scripts.
+- **Patch during the build.** `dnf update` / `apt upgrade`, strip stale packages, refresh monitoring agents. The image is patched once; instances launch already current.
+- **Bake in the security tooling.** SSM Agent (so you can drop SSH entirely), CloudWatch Agent, and the config for GuardDuty and Inspector coverage. Agent presence is a build-time guarantee, not a per-instance hope.
+- **Enforce the instance-metadata and disk controls.** IMDSv2-only in the launch template, EBS encryption on by default with a CMK, root login disabled.
+- **Scan before you publish.** Run **Amazon Inspector** (or OpenSCAP / CIS-CAT) against the build instance. The pipeline distributes only if the scan passes; a Critical or High finding halts it.
+- **Create and tag the image.** `aws ec2 create-image` for one-offs, **EC2 Image Builder** for a repeatable pipeline. Tag `hardened=true`, `cis_level=1`, stage, and version.
+- **Scope and rotate.** Keep AMIs private or account-scoped, rebuild on a cadence, and store the current image ID in **SSM Parameter Store** so launch templates resolve "latest hardened" instead of a pinned stale ID.
 
-**Hardening an AMI** means locking it down before it's used, so any EC2 launched from it starts life with a **secure, production-grade posture**.  
-It’s especially critical in:
+## AMI hardening vs the rest of the compute-image stack
 
-- Production environments  
-- Regulated workloads (PCI, HIPAA, FedRAMP, etc.)  
-- Multi-account or CI/CD-driven infrastructure  
-- Zero-trust networks  
+| | EC2 Image Builder | Manual AMI (`create-image`) | Packer (self-managed) | SSM Patch Manager |
+|---|---|---|---|---|
+| Model | Automated golden-image pipeline | One-off snapshot | Automated, you run it | Patches running instances |
+| Repeatable / versioned | Yes, semantic versions | No | Yes | N/A |
+| Built-in hardening + CVE scan | CIS / STIG components plus Inspector | No | You script it | Patches, does not harden |
+| Distribution | Multi-account, multi-Region | Manual copy | You script it | In place |
+| Best for | Immutable, compliant image supply chain | Quick throwaway | Multi-cloud builds | Keeping live fleets current |
 
-This makes AMI Hardening a **baseline security control**, not a nice-to-have.  
-It’s *“secure by design.”*
+## What gets tested
 
----
+- **Golden image over per-instance work.** When a scenario has a fleet needing a consistent secure baseline, pick EC2 Image Builder, not "SSH in and patch each one" and not "SSM Patch Manager." Patch Manager keeps *running* instances current; it does not produce a hardened image.
+- **CIS vs STIG components.** Both are AWS-managed hardening components. STIG components are free. CIS hardening runs through a Marketplace CIS subscription (there is a cost), and CIS pre-hardened base images / components are AMI-only, not container recipes.
+- **Where the CVE scan lives.** Inspector is the assessment step inside the build and the continuous scanner on running instances. It is not the thing that hardens; it is the gate that proves hardening worked.
+- **The remediation loop.** Inspector High/Critical finding fires an EventBridge rule that reruns the Image Builder pipeline and republishes a fresh image. Recognize this as the "how do we keep images from drifting" answer.
+- **IMDSv2 and SSM as distractors.** Enforcing IMDSv2 and replacing SSH with Session Manager are hardening measures set at build time, frequently the "more correct" option versus a security-group or NACL change that only narrows the blast radius.
+- **Sharing scope.** Hardened AMIs stay private or account-scoped, shared cross-account with explicit launch permissions or RAM. "Make the AMI public" is always wrong in a compliance scenario.
 
-## Cybersecurity Analogy
+## Limitations
 
-Think of AMIs like **manufacturing molds**.  
-If you’re stamping out hundreds of machines using a **flawed mold** — every product is compromised from the jump.
-
-Hardening your AMI is like reinforcing that mold with:
-
-- strict quality control  
-- tamper-proofing  
-- anti-defect guidelines  
-
-Now every product you create starts **secure**.
-
-## Real-World Analogy
-
-Imagine Blizzard is spinning up **300 EC2s** to power an upcoming **multiplayer event**.
-
-Instead of patching each one individually, **Snowy** bakes a secure, hardened AMI:
-
-- All unnecessary packages stripped out  
-- Only port 443 open  
-- SSH disabled; SSM only  
-- CloudWatch and GuardDuty agents installed  
-- Audit logging enabled  
-- IMDSv2 enforced  
-
-**Result?**  
-Every server is consistent, monitored, encrypted, and compliant — from the first boot.
-
----
-
-## How It Works (What You Do)
-
-Hardening an AMI involves several steps, typically **automated in a pipeline**:
-
-### 1. Start with a secure base image
-
-- Prefer **Amazon Linux 2/2023**, **Ubuntu LTS**, **RHEL**, etc.  
-- Avoid random Marketplace or community images.
-
-### 2. Apply security configurations
-
-- Disable unused services, ports, users  
-- Enforce file permissions, logging, SELinux/AppArmor
-
-### 3. Update and patch
-
-- Run `yum update` or `apt upgrade`  
-- Remove stale packages, update antivirus/monitoring agents
-
-### 4. Install monitoring + security tooling
-
-- SSM agent, GuardDuty detectors, CloudWatch logs  
-- CIS benchmark scripts or Inspector scans
-
-### 5. Cleanup
-
-- Remove `.bash_history`, temporary credentials  
-- Ensure no secrets are baked in
-
-### 6. Scan the hardened instance
-
-- Run **Amazon Inspector** or **CIS-CAT**  
-- Confirm zero critical vulnerabilities
-
-### 7. Create the hardened AMI
-
-- Use `aws ec2 create-image` or **EC2 Image Builder**  
-- Tag it:  
-  - `hardened=true`  
-  - `cis_level=1`  
-  - `owner=snowy`
-
-### 8. Restrict access
-
-- Keep AMIs **private** or **scoped by account**  
-- Don’t share hardened AMIs publicly unless absolutely necessary
-
-### 9. Version and rotate
-
-- Rebuild AMIs on a regular cadence (weekly/monthly)  
-- Use **SSM Parameter Store** to store “latest hardened AMI ID”
-
----
-
-## Pricing Models
-
-AMI hardening has **no direct cost**, but related services include:
-
-| Service              | Cost Factor                                |
-|----------------------|---------------------------------------------|
-| EC2 Image Builder    | No cost for the service itself              |
-| EC2 Instance (build) | Normal EC2 pricing during build             |
-| Amazon Inspector     | Per-resource scanning fee                   |
-| CloudWatch/SSM       | Charges for logs, metrics, etc.             |
-
----
-
-## Other Key Details
-
-| Area             | Best Practice Example                                                       |
-|------------------|------------------------------------------------------------------------------|
-| IMDS             | Enforce **IMDSv2 only** in launch template                                   |
-| Root Login       | Disable root login and use non-root users                                    |
-| SSH              | Remove SSH entirely if using Session Manager                                 |
-| Unused Packages  | Strip out FTP, Telnet, NFS, rpcbind, netcat, etc.                            |
-| Logging          | Pre-configure auditd, journald, and ship logs to CloudWatch                  |
-| EBS Encryption   | Enable by default with CMK or AWS-managed key                                |
-| Marketplace      | Use **vetted, verified hardening partners only** (CIS, STIG, etc.)           |
-| Vulnerability Scan | Amazon Inspector or OpenSCAP                                               |
-| Lifecycle Control | Tag AMIs by version, stage (dev, prod), and expiration timestamp            |
-
----
-
-## Real-Life Example
-
-**Snowy** works on a **regulated healthcare workload (HIPAA)**.  
-EC2s must be:
-
-- Log-monitored  
-- Agent-backed  
-- No direct shell access  
-- Disk-encrypted  
-- Network-restricted  
-
-Instead of doing this per-instance, Snowy automates a **secure AMI pipeline** using **EC2 Image Builder**.
-
-Weekly, it:
-
-1. Spins up base **Amazon Linux 2023**  
-2. Applies **Ansible scripts**  
-3. Runs **Amazon Inspector**  
-
-- If it **passes** → AMI is versioned and published  
-- If it **fails** → pipeline halts  
-
-Now dev teams just use the `blizzard-prod-ami` and launch secure instances **without thinking about security** — because it’s **baked in**.
-
----
-
-## Final Thoughts
-
-Hardening AMIs isn’t optional anymore.  
-It’s **table stakes** for secure cloud infrastructure.
-
-If your EC2 fleet is running on:
-
-✖️ Default images  
-✖️ Community builds  
-✖️ Manual patching  
-
-...you’re flying blind.
-
-**Hardened AMIs** are how you scale **compliance**, **visibility**, and **secure defaults** from Day 0.  
-It’s not about **perfection** — it’s about **predictable, audit-ready baselines**.
-
+- Hardening secures the image at build time only. Configuration drift, runtime compromise, and new CVEs published after the build are not covered, which is why Inspector on running instances and a rotation cadence are mandatory, not optional.
+- AWS-managed STIG components are fixed with no parameters. If they break an application you cannot disable a single finding ID; you clone the component and scope it down yourself.
+- STIG and CIS components scan and remediate against a baseline, but AWS does not warrant that the resulting image is certified compliant. Final sign-off is your compliance team's, not the pipeline's.
+- Image Builder automates AMIs and container images but does not patch already-running fleets. Pairing it with SSM Patch Manager (or immutable redeploys) covers the gap between rebuilds.
+- The pipeline itself is attack surface. Build in an isolated subnet with a scoped instance profile, or the build environment becomes the weak link in the image supply chain.

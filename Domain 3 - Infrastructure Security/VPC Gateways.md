@@ -1,173 +1,44 @@
-# VPC Gateways — Deep Dive
+# VPC Gateways
 
-## What Are VPC Gateways
+"VPC gateway" is a category, not one service: the entry and exit points that move traffic between a VPC and the internet, on-premises, other VPCs, or AWS services. Each type carries a different security implication, because gateways plus route tables decide what can reach in, what can reach out, and whether that path is private, encrypted, logged, and segmented. The thing to hold onto: gateways do not filter traffic themselves; the **route table** decides a subnet's fate (a `0.0.0.0/0` route to an IGW makes it public, to a NAT gateway makes it private egress-only), so most gateway exam traps are really routing and segmentation questions, and the sharpest distinctions are IGW vs NAT vs egress-only, and VGW vs TGW for transitive routing.
 
-In AWS, a “VPC Gateway” isn’t a single service — it’s a category of components that act as entry or exit points for network traffic in and out of a Virtual Private Cloud (VPC).  
-They’re essentially the bridges between your VPC and:
+## How it works
 
-- The internet  
-- Your on-premises network  
-- Other VPCs  
-- Other AWS services  
+- **Internet Gateway (IGW).** Bidirectional public internet path for a VPC. A subnet is "public" only when its route table sends `0.0.0.0/0` to the IGW and instances have public/Elastic IPs. One IGW per VPC. Accidentally routing a private subnet to the IGW exposes it.
+- **NAT Gateway (NGW).** Lets private-subnet resources initiate outbound to the internet without being reachable inbound. It sits in a public subnet with an EIP; private route tables point `0.0.0.0/0` at the NAT gateway. Deploy one per AZ for HA. It has no security group (control it with subnet NACLs), and it is IPv4 only.
+- **Egress-Only Internet Gateway (EOIGW).** The IPv6 equivalent of a NAT gateway: outbound-only for **IPv6**. It is not a NAT (no address translation) and does not work for IPv4, a common misconception.
+- **Virtual Private Gateway (VGW).** The AWS-side terminator for a Site-to-Site **IPsec VPN** (or Direct Connect) to one VPC. Uses static or BGP routing. Transitive routing (site-to-site through AWS) works only with **BGP/dynamic routing** (VPN CloudHub), not static, and a VGW attaches to a single VPC.
+- **Transit Gateway (TGW).** A regional **hub-and-spoke** router connecting many VPCs, VPNs, and Direct Connect. Supports transitive routing, inter-Region peering, and **multiple route tables with associations and propagations** to segment traffic (production vs non-production, or an inspection domain). Shareable cross-account with **RAM**. Traffic stays on the AWS backbone.
+- **Route tables tie it together.** Gateways only carry traffic that routing sends them, so subnet route tables, propagations, and TGW route-table segmentation are where control actually lives.
 
-Each type of gateway handles a different kind of traffic — and more importantly, each one has different security implications.  
-If you're designing for isolation, control, and auditability, understanding VPC gateways is non-negotiable. Gateways determine your blast radius — what can talk in, what can talk out, and whether that communication is encrypted, logged, controlled, or totally exposed.
+## Gateway selection
 
----
+| Need | Gateway |
+|---|---|
+| Public inbound + outbound (IPv4) | Internet Gateway |
+| Private subnet outbound only (IPv4) | NAT Gateway |
+| Private subnet outbound only (IPv6) | Egress-Only IGW |
+| On-prem VPN to a single VPC | Virtual Private Gateway |
+| Many VPCs + VPN/DX, segmented, transitive | Transit Gateway |
+| Two VPCs, simple, non-transitive | VPC Peering |
+| Private AWS-service access | VPC Endpoint (gateway/interface) |
 
-## Cybersecurity Analogy
+## What gets tested
 
-Imagine your VPC is a secure corporate campus. Gateways are the doors and gates in the fencing around it.
+- **Route table decides public vs private.** The difference between a public and private subnet is which gateway `0.0.0.0/0` points to (IGW vs NAT), not the subnet name. "Private instances are internet-reachable" is a route pointing at the IGW.
+- **NAT vs egress-only IGW by IP version.** IPv4 private egress is a NAT gateway; IPv6 private egress is an egress-only IGW. Using a NAT gateway for IPv6, or an EOIGW for IPv4, is wrong.
+- **VGW vs TGW transitive routing.** A single-VPC IPsec VPN terminates on a **VGW**. Connecting many VPCs with transitive routing, segmentation, and central inspection is a **TGW**. VGW site-to-site transit needs BGP (CloudHub); static does not transit.
+- **TGW segmentation prevents lateral movement.** A flat TGW route table lets one compromised VPC reach all others. The control is separate TGW route tables per domain with scoped associations/propagations. "Isolate prod from dev over the shared hub" is TGW route-table segmentation.
+- **VPC peering is not transitive.** If A peers B and B peers C, A cannot reach C. Full-mesh peering scales poorly; that is the reason to move to a TGW hub. Watch scenarios that assume transit over peering.
+- **NAT gateway has no security group.** You cannot attach an SG to a NAT gateway or IGW; subnet-level control there is the NACL. Traffic can still leak through a misrouted table regardless of instance SGs.
+- **VPC Block Public Access.** To centrally guarantee subnets cannot reach the internet regardless of route tables, VPC Block Public Access (account/Region, with exclusions) is the org-wide guardrail, stronger than auditing individual route tables.
+- **Visibility.** VPC Flow Logs (and TGW Flow Logs) plus CloudTrail are how you watch ingress via IGW and egress via NAT; `PacketDropCountBlackhole` on a TGW flags routes with no destination.
 
-- The **Internet Gateway** is the main road that leads to the outside world. It’s got fast traffic, open lanes, and if not monitored, anyone can walk in or out.  
-- The **NAT Gateway** is like a one-way mirror door — people inside can look out and send things, but outsiders can’t see in or knock.  
-- The **Virtual Private Gateway** is like a dedicated tunnel from your branch office — it’s encrypted and secure, but if the tunnel is misconfigured, someone can sneak in.  
-- The **Transit Gateway** is like a central hub airport — multiple campuses can interconnect through it, but delays, congestion, and security scans apply.  
+## Limitations
 
-If you leave the wrong gate open, or let the wrong people walk through, your entire VPC is at risk.
-
-## Real-World Analogy
-
-Let’s say **WinterdayCorp** has:
-
-- A public EC2 web server  
-- A private EC2 app server  
-- A database in a private subnet  
-- A VPN to their on-prem data center  
-
-They need users to reach the web app, but keep everything else hidden. Here's what they do:
-
-- Add an **Internet Gateway (IGW)** to allow internet access to the public EC2  
-- Deploy a **NAT Gateway (NGW)** in a public subnet, so the private EC2s can reach the internet for patching — without being reachable from the internet  
-- Attach a **Virtual Private Gateway (VGW)** for secure IPSec VPN to on-prem  
-- Later, add a **Transit Gateway (TGW)** to connect multiple VPCs with shared services like DNS and logging  
-
-Each gateway is tightly scoped using:
-
-- Route tables  
-- NACLs  
-- Security groups  
-- CloudWatch logs  
-- VPC Flow Logs  
-
-If a developer accidentally routes private subnet traffic through the IGW? That’s a breach waiting to happen.
-
----
-
-## Types of VPC Gateways
-
-Here’s a breakdown of the key types and when you’d use them:
-
-### 1. Internet Gateway (IGW)
-
-- **Purpose**: Allow VPC resources (like EC2) to send/receive traffic from the public internet  
-- **Use case**: Hosting public websites, APIs, or download agents  
-- **Security**:  
-  - Must be explicitly routed via route tables  
-  - Requires public IPs or Elastic IPs on instances  
-  - Should be paired with strict security groups  
-  - Flow Logs and WAF help monitor/limit exposure  
-- **Misconfig risk**: If a private subnet is accidentally routed through the IGW, internal systems become publicly accessible.
-
-### 2. NAT Gateway (NGW)
-
-- **Purpose**: Allow private subnet resources to initiate outbound internet connections without being directly reachable from the internet  
-- **Use case**: EC2 downloading patches, app servers making HTTP calls  
-- **Security**:  
-  - One-way outbound communication  
-  - Should be deployed in multiple AZs for HA  
-  - Doesn’t require public IPs on the instances  
-  - Costs can spike with large data transfers  
-- **Misconfig risk**: NAT Gateway in wrong subnet or no route → breaks all outbound traffic.
-
-### 3. Virtual Private Gateway (VGW)
-
-- **Purpose**: Connect on-premises data centers to AWS via VPN (IPSec)  
-- **Use case**: Hybrid architecture, shared services between AWS and on-prem  
-- **Security**:  
-  - Encrypted tunnels  
-  - Use BGP for dynamic routing  
-  - Set up routing filters, guardrails  
-  - Terminate VPN at the VGW  
-- **Misconfig risk**: Improper routing → route leakage → attackers gain access to VPC or on-prem.
-
-### 4. Transit Gateway (TGW)
-
-- **Purpose**: Connect multiple VPCs and VPNs through a single, scalable hub  
-- **Use case**: Large multi-account architectures, shared services mesh  
-- **Security**:  
-  - Fine-grained route table per VPC attachment  
-  - Supports multicast and inter-region peering  
-  - Can use RAM (Resource Access Manager) for cross-account TGW sharing  
-  - Should always pair with IAM conditionals and CloudWatch alarms  
-- **Misconfig risk**: Flat route tables → one compromised VPC = lateral access to others.
-
-### 5. Egress-Only Internet Gateway (EOIGW)
-
-- **Purpose**: Allow IPv6-only resources in private subnets to reach the internet  
-- **Use case**: Outbound IPv6 access for app servers or containers  
-- **Security**:  
-  - Only works with IPv6 (not v4)  
-  - Enforces one-way comms (no inbound)  
-  - Combine with prefix lists, scoped security groups  
-- **Misconfig risk**: Misunderstood behavior; developers assume it's a NAT equivalent — it's not.
-
-### 6. VPC Endpoints (Gateway vs Interface)
-
-- **Purpose**: Let you privately connect to AWS services without using the public internet  
-- **Use case**: Accessing S3, DynamoDB, Secrets Manager, etc. from private subnet  
-
-#### Gateway Endpoint:
-
-- For S3 & DynamoDB only  
-- Adds static routes to your route tables  
-
-#### Interface Endpoint:
-
-- For everything else  
-- Deploys ENIs into your subnets  
-
-**Security**:
-
-- Prevents data exfil to internet  
-- Supports VPC endpoint policies for granular access  
-- Should enable Private DNS to override public routes  
-
-**Misconfig risk**:  
-Accidentally route traffic through public IGW when a VPC endpoint is available → logs, data, or secrets leak out.
-
----
-
-## Other Stuff
-
-- Route tables control gateway behavior. If your route to `0.0.0.0/0` points to IGW, your subnet is public. If it points to NGW, it’s private. Never assume — always verify.  
-- You can’t attach multiple IGWs to the same VPC, but you can have multiple TGWs, VPNs, and endpoints.  
-- Security groups don’t apply to IGWs or NGWs — they apply to EC2/Lambda/etc. Traffic can still be leaked if routing is misconfigured.  
-- Always use **VPC Flow Logs** to watch gateway activity, especially ingress via IGW and egress via NGW. Match that to CloudTrail activity for full picture.  
-- TGWs should use segmented route tables per VPC to prevent flat-mesh topologies — or else one compromised VPC becomes a highway.  
-- Watch out for transitive routing with VGW and TGW — AWS doesn’t support full transit via VGW, but TGW does. Don't assume pathing — test it.
-
----
-
-## Final Thoughts
-
-**VPC Gateways are like doors into your cloud castle** — and if you're not checking who they open to, how they're locked, or where they point, you're going to get burned.
-
-Many teams treat gateways as “just networking plumbing,” but the truth is: they’re some of the most abused and misunderstood surfaces in cloud security.
-
-You don’t need WAF, GuardDuty, and KMS if someone can `curl` straight into your database over a misconfigured IGW.
-
-Build with intention. Every gateway should be:
-
-- Monitored  
-- Scoped  
-- Documented  
-- Audited  
-- Threat modeled  
-
-No default settings. No “just make it work.”  
-And always ask:
-
-> “If traffic goes through this gateway, do I know where it came from, where it's going, and whether it's encrypted, logged, and authorized?”
-
-If the answer is “uhh…” — then it’s time to rebuild that route table.
+- Gateways do not inspect or filter. They move traffic; enforcement is route tables, NACLs, security groups, and (for inspection) Network Firewall or a GWLB appliance. A misconfigured route bypasses every instance-level control.
+- One IGW per VPC and a VGW attaches to a single VPC; scaling connectivity across many VPCs is what TGW is for.
+- NAT gateways are IPv4-only, per-AZ for HA, and charge per hour plus per-GB processed, so large egress volumes get expensive; they also have no SG.
+- VGW site-to-site transitive routing requires BGP; static routing does not transit, and VGW does not provide VPC-to-VPC transit the way TGW does.
+- VPC peering is non-transitive and full-mesh, so it does not scale and cannot centralize inspection or shared egress; that is a TGW pattern.
+- TGW adds per-attachment and per-GB cost and, if left as a flat route table, becomes a lateral-movement highway; segmentation is a deliberate design step, not a default.

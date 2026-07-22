@@ -1,181 +1,43 @@
-# Network ACLs (NACLs)  
+# Network ACLs (NACLs)
 
-## What Is It
+A Network ACL is a subnet-level firewall in a VPC that evaluates traffic entering or leaving an entire subnet, before it reaches any instance's security group. NACLs are stateless: every packet is evaluated independently in both directions, with no memory of prior connections, so return traffic is not automatically allowed. They also support explicit DENY, which security groups cannot. The thing to hold onto: the NACL is the coarse, ordered, stateless perimeter around a subnet whose one superpower over security groups is the ability to DENY, so the exam reaches for a NACL exactly when the requirement is "block this CIDR/port across a whole subnet," and punishes you for forgetting the ephemeral-port return rule.
 
-Network ACLs (Access Control Lists) are subnet-level firewalls that control traffic entering or leaving an entire subnet in your Amazon VPC. Unlike Security Groups, NACLs are stateless, meaning every single request and response is evaluated independently — there’s no memory of prior connections.  
-They process traffic before it even hits your instance, enforcing rules at the perimeter of your subnet.
+## How it works
 
-**Why this matters:**  
-Security Groups are great for controlling access to specific resources, but what if you want to block a known malicious IP range at the subnet level, or apply blanket deny rules for non-compliant protocols? That’s where NACLs shine — they operate at the first line of network entry, often acting as a coarse filter to reduce the blast radius of a breach or misconfiguration.
+- **Two ordered rule sets.** Separate inbound and outbound lists. Each rule has a number (1 to 32766, lowest first, first match wins), protocol, port range, a CIDR source (inbound) or destination (outbound), and ALLOW or DENY. CIDR only, no security-group references.
+- **Default vs custom.** The **default NACL** allows all inbound and outbound. A **custom NACL** starts as deny-all in both directions; you must add explicit allow rules, in both directions, because it is stateless.
+- **Stateless return traffic.** Allowing inbound 443 does not allow the response out. The reply leaves from the server on an **ephemeral port**, so you must allow the ephemeral range explicitly. Ranges depend on the responder: Linux 1024-65535, Windows Server 2008+ 49152-65535, and NAT gateway, ELB, and Lambda all use 1024-65535. In practice open 1024-65535 for return traffic and layer targeted DENY rules for known-bad ports.
+- **Association.** A subnet has exactly one NACL at a time, but one NACL can be attached to many subnets. Replacing the association removes the old one.
+- **Evaluation with security groups.** Both layers are checked independently. A packet must pass the NACL (subnet) and the ENI's security group. Either layer denying drops it, which is what makes NACL + SG a defense-in-depth pair.
+- **Logging.** NACLs have no native per-rule logging; use **VPC Flow Logs** to see allowed and denied flows.
 
----
+## NACL vs security group
 
-## Cybersecurity Analogy
+| | NACL | Security group |
+|---|---|---|
+| Scope | Subnet | ENI / resource |
+| State | Stateless (both directions explicit) | Stateful (return auto-allowed) |
+| Rules | Allow and Deny | Allow only |
+| Evaluation | Numbered order, first match wins | All rules, most-permissive |
+| References | CIDR only | CIDR or SG ID |
+| Default object | Allows all | Denies all inbound |
+| Best for | Subnet-wide deny, block a CIDR/port, tier isolation | Precise per-resource allow-listing |
 
-Imagine your subnet is a gated community.  
-Security Groups are the guards at each home, while NACLs are the checkpoint at the neighborhood entrance.  
+## What gets tested
 
-But this checkpoint doesn’t care who you are — it just follows its list.  
-If you match a rule, you’re allowed. If you don’t, you’re stopped.  
+- **DENY is the NACL's job.** Security groups cannot deny. "Block this specific malicious CIDR" or "block port X across the whole subnet regardless of instance" is a NACL DENY rule. This is the single most common reason a scenario's answer is NACL over SG.
+- **Stateless ephemeral-port trap.** "Requests are accepted but responses are dropped" means the outbound (or inbound, for instance-initiated traffic) ephemeral range 1024-65535 is missing. Recognize the stateless symptom instantly.
+- **Rule order matters.** Lowest number wins, so a low-numbered DENY overrides a higher-numbered ALLOW. A misordered rule silently blocks or permits traffic; verify numbering.
+- **One NACL per subnet, reusable across subnets.** Know the association cardinality; a subnet cannot carry two NACLs.
+- **NACL cannot filter the Route 53 Resolver.** NACLs (and SGs) can't block DNS to/from the VPC+2 resolver address. To filter DNS, use **Route 53 Resolver DNS Firewall**, not a NACL rule.
+- **NAT gateway uses NACLs, not SGs.** A NAT gateway has no security group, so subnet-level control for it is the NACL. Scenarios about restricting NAT traffic point at the NACL.
+- **Automated response fit.** Because a NACL can DENY a whole CIDR at the subnet edge, it is the natural target for GuardDuty-to-EventBridge-to-Lambda auto-remediation that blocks a scanning source, distinct from an SG which could only stop allowing it.
 
-Also: this guard doesn’t remember if you just walked in 10 seconds ago.  
-If you want to come back in, you go through the entire screening again.  
-That’s stateless logic.
+## Limitations
 
-## Real-World Analogy
-
-Picture a toll booth at the entrance of a private road. Every vehicle is checked — every time.  
-
-- It doesn’t remember that you were allowed in yesterday.  
-- It doesn’t assume that returning traffic is okay.  
-- If your direction isn’t explicitly allowed, you don’t get through.  
-
-Now apply that to IP packets, and you’ve got a NACL.
-
----
-
-## How It Works
-
-Every NACL has **two rule sets**:
-
-- **Inbound Rules** — evaluated for traffic coming into the subnet  
-- **Outbound Rules** — evaluated for traffic leaving the subnet  
-
-- Rule number (1–32766; lower numbers take precedence)  
-- Protocol (TCP, UDP, ICMP, ALL)  
-- Port range (e.g., 80–80 for HTTP, or ALL)  
-- Source/Destination (CIDR blocks)  
-- Action: ALLOW or DENY  
-
-### Key characteristics:
-
-| **Feature**             | **Behavior**                                           |
-
-|-------------------------|--------------------------------------------------------|
-| Stateless               | Must allow traffic in both directions explicitly       |
-| Ordered Evaluation      | Rules processed in ascending order; first match wins   |
-| Default Behavior        | If no rule matches, traffic is denied by default       |
-| Associated to Subnets   | Each subnet can only have 1 NACL at a time             |
-| Shared Across Subnets   | NACLs can be reused across multiple subnets            |
-| Logging                 | No native logging; use VPC Flow Logs instead           |
-
----
-
-## NACLs vs Security Groups
-
-| **Property**     | **NACL**                             | **Security Group**                      |
-|------------------|--------------------------------------|------------------------------------------|
-| **Scope**        | Subnet-level                         | Resource-level (ENI)                     |
-
-| **Statefulness** | Stateless — both directions must be allowed | Stateful — return traffic allowed automatically |
-| **Rules**        | Allow or Deny                        | Allow only                               |
-| **Rule Eval**    | Ordered (lowest first)               | All rules evaluated                      |
-| **Defaults**     | Default NACL allows all              | Default SG denies all                    |
-| **Best For**     | Broad deny lists, subnet-wide filtering | Precise instance-level access control  |
-
----
-
-## Common Use Cases
-
-| **Use Case**                          | **NACL Rule Configuration**                                |
-|---------------------------------------|-------------------------------------------------------------|
-| Block all SSH access from the internet | Inbound: DENY TCP 22 from 0.0.0.0/0                         |
-| Allow HTTP/HTTPS from the internet     | Inbound: ALLOW TCP 80/443 from 0.0.0.0/0                   |
-| Allow response traffic from web servers| Outbound: ALLOW TCP 1024–65535 to 0.0.0.0/0                |
-| Isolate backend subnet from public     | Inbound: DENY ALL from public CIDR range                   |
-| Block known bad IP ranges              | Inbound: DENY ALL from 203.0.113.0/24                      |
-| Egress filtering for compliance        | Outbound: ALLOW ports 443/80; DENY ALL others             |
-
----
-
-## Network Flow Example
-
-Let’s say **Winterday’s VPC** has:
-
-- A public subnet for an ALB  
-- A private subnet for EC2 instances  
-
-**Flow:**  
-1. Client makes HTTPS request to ALB  
-2. NACL on public subnet allows TCP 443 inbound  
-3. NACL allows outbound ephemeral ports to send response  
-4. ALB forwards traffic to EC2 in private subnet  
-5. Private subnet NACL allows inbound from ALB CIDR on port 443  
-6. EC2 replies → outbound rule allows ephemeral range  
-
-**Failure Example:**  
-If Winterday forgets to add the outbound rule on the public subnet, return traffic is blocked.  
-That’s the **stateless pain point** — *both directions must be explicitly allowed.*
-
----
-
-## Security Automation + Detection
-
-| **Security Concern**                    | **Tool/Strategy**                                           |
-|----------------------------------------|-------------------------------------------------------------|
-| NACL allows SSH from 0.0.0.0/0          | AWS Config rule + EventBridge + Lambda remediation          |
-| Open to ALL traffic (0.0.0.0/0 ANY)     | Security Hub finding + central NACL scanner                |
-| No return traffic allowed               | Flow logs + Reachability Analyzer                          |
-| Known bad IPs accessing subnets         | GuardDuty + Athena lookup → update NACL deny rules         |
-| Inconsistent NACLs across subnets       | Custom Lambda to audit and normalize rule sets             |
-
----
-
-## Real-Life Example: SnowySec Perimeter Hardening
-
-To comply with SOC 2 and reduce attack surface, **SnowySec** enforced:
-
-- A hardened default NACL:
-  - DENY all inbound except ports 80, 443  
-  - DENY port 22 from all IPs  
-  - ALLOW outbound ports 80, 443, 53 (DNS)  
-  - DENY all other outbound traffic  
-
-- **GuardDuty + EventBridge integration**:  
-  Recon behavior detected (e.g., port scanning) → Lambda added `DENY ALL` for that CIDR to NACL.  
-  → Subnet blocked at the edge within seconds.
-
-- **VPC Flow Logs → Athena**:  
-  Tracked patterns of blocked connections.
-
-- **App subnet NACLs**:  
-  ALLOW only traffic from trusted internal CIDRs — blocked lateral movement in red team sim.
-
-**Result:**  
-During a simulated EC2 compromise, the attacker couldn’t:
-
-- Pivot laterally  
-- Reach the internet  
-
-NACLs acted as a *killbox* around the subnet.
-
----
-
-## Pricing
-
-| **Feature**           | **Cost**                                 |
-|------------------------|-------------------------------------------|
-| NACL Rules             | Free                                      |
-| Evaluation per packet  | Free                                      |
-| Flow Log visibility    | Standard CloudWatch/S3 pricing applies    |
-
----
-
-## Final Thoughts
-
-Network ACLs don’t replace Security Groups — they **reinforce** them.
-
-They’re **stateless**, **brutal**, and **surgical**.  
-No memory, no mercy. Perfect for:
-
-- Quick reaction to suspicious IPs  
-- Hard perimeter enforcement  
-- Compliance-driven egress filtering  
-- Subnet-wide kill switches  
-
-**But use them wisely.**  
-A single missing rule can blackhole your traffic.  
-And no, AWS won’t tell you which packet got dropped.
-
-**Treat NACLs as your early warning fence. Let Security Groups be your precision guards.**
-
+- Stateless design makes NACLs error-prone: every allow needs a matching return rule, and a single missing ephemeral rule blackholes traffic with no per-rule log to say why.
+- CIDR-only matching means no security-group references and no identity awareness, so NACLs cannot express "allow from this SG" the way security groups can. They are coarse by design.
+- There is a per-NACL rule quota (default 20 inbound and 20 outbound, adjustable to a hard ceiling), so long deny-lists of individual CIDRs do not scale; aggregate ranges or use Network Firewall for large or L7 filtering.
+- No stateful inspection, no L7 awareness, no logging of its own. For application-layer filtering, deep inspection, or managed threat feeds, the answer is AWS Network Firewall or WAF, not a NACL.
+- NACLs cannot filter Route 53 Resolver DNS traffic; DNS-layer filtering requires DNS Firewall.
+- Ordered first-match evaluation means changes are easy to get wrong under pressure; a low-numbered rule added for one purpose can shadow existing allows across the whole subnet.

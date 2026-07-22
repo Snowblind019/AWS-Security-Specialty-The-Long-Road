@@ -1,150 +1,35 @@
-# AWS Shield
+# AWS Shield Standard
 
----
+AWS Shield Standard is the free, always-on DDoS protection tier that AWS applies automatically at the edge to every customer. It defends against the common volumetric and state-exhaustion attacks that live at Layers 3 and 4 (SYN floods, UDP reflection, NTP and DNS amplification) and it does so with no opt-in, no configuration, and no tuning. The catch is that it only intercepts traffic on services that route through the AWS edge or network layer, so an app sitting on a raw EC2 public IP gets nothing until you front it. The thing to hold onto: Shield Standard is automatic L3/L4 availability protection at the edge, it stops nothing at the application layer (that is WAF and Shield Advanced), and it only protects the specific fronting services that let AWS see the traffic first.
 
-## What Is The Service
+## How it works
 
-**AWS Shield** is a managed Distributed Denial of Service (DDoS) protection service built directly into AWS. It’s always on, requires no configuration, and provides **automatic mitigation** against the most common types of DDoS attacks — like UDP floods, SYN/ACK floods, and reflection-based amplification attacks.
+- **It runs at the edge, not on your instance.** Traffic to CloudFront, Route 53, Global Accelerator, and the elastic load balancers passes through AWS-managed infrastructure where Shield inspects it before it reaches your origin. This edge position is the whole reason it can absorb volumetric floods.
+- **Detection is signature and anomaly based.** A global sensor network watches packet rates, source patterns, and known DDoS signatures across AWS, then flags SYN floods, DNS query floods, and reflection or amplification traffic.
+- **Mitigation is automatic and silent.** When an attack is detected, Shield deploys drops, filters, and rate limits inline. There is no console to watch, no rules to write, and by design no per-customer dashboard on the Standard tier.
+- **Coverage follows the fronting service, not the account.** You are protected wherever your traffic enters through a supported edge or load-balancing service. Expose a workload directly on an EC2 public IP and it sits outside that intercept path.
+- **Scope is strictly L3/L4.** It handles the network and transport layers. Anything that is a valid-looking HTTP request (application-layer floods, credential stuffing, checkout-API abuse) passes straight through to be handled by WAF or Shield Advanced.
 
-It’s designed to help you keep your AWS-hosted applications **available**, even when under attack.
+## Shield Standard vs the rest of the DDoS/app stack
 
-> Shield is not an optional service — it’s silently protecting you behind the scenes the moment you use supported services like **CloudFront**, **Route 53**, or **ALBs**.
+| Layer / control | What it handles | Where Shield Standard sits |
+|---|---|---|
+| **Shield Standard** | Automatic L3/L4 DDoS at the edge | Always on, free, no config |
+| **Shield Advanced** | Deeper L3-L7 detection, WAF auto-mitigation, cost protection, SRT | Paid opt-in above Standard |
+| **AWS WAF** | L7 request filtering: rate-based rules, injection, bad bots | You configure it; Standard does not touch L7 |
+| **Fronting service** | CloudFront / Route 53 / GA / ELB puts traffic on the edge | Prerequisite for Standard to see traffic at all |
 
-There are two tiers:
-- **Shield Standard** (free, always on)
-- **Shield Advanced** (premium, opt-in, deeper protection — covered separately)
+## What gets tested
 
-For now, we’re focusing on **Shield Standard**.
+- **L3/L4 vs L7 boundary.** If the scenario is an HTTP flood, credential stuffing, or API abuse, Shield Standard is the wrong answer and WAF (or Shield Advanced) is right. Standard only covers network and transport layer floods.
+- **Automatic vs opt-in.** Standard is on for everyone with zero setup. Advanced is the paid tier you enable for deeper detection, the Shield Response Team, and DDoS cost protection.
+- **Coverage requires a fronting service.** A public EC2 instance with no CloudFront, ALB/NLB/CLB, Route 53, or Global Accelerator in front is not meaningfully protected. The exam tests whether you know Standard needs the traffic on the edge.
+- **No visibility on Standard.** If the requirement is DDoS metrics, attack diagnostics, or notification, that is Shield Advanced, not Standard.
 
----
+## Limitations
 
-## Cybersecurity Analogy
-
-Imagine you’re in charge of a massive concert venue.  
-Outside, there’s a **security perimeter** with guards whose job is to detect and deflect any chaos — like mobs of people trying to rush in without tickets.
-
-**AWS Shield** is like those guards:
-- You don’t see them on stage
-- You don’t have to train them
-- But they’re always outside, watching for patterns and stepping in when something unusual happens
-
-They can’t stop *every* threat, but they’ll absorb the brunt of the chaos **before it hits your front door**.
-
-## Real-World Analogy
-
-Picture an **automatic surge protector** wired into the foundation of your house.  
-You plug in your devices, not really thinking about it.
-
-Then one day — a massive electrical surge from a lightning storm threatens your home.  
-But your surge protector kicks in without needing your permission — it **absorbs and reroutes** the excess voltage, protecting your electronics.
-
-You never even knew it saved your system.  
-That’s AWS Shield — a built-in **circuit breaker for traffic volume**, and it’s already running behind the scenes.
-
----
-
-## How It Works
-
-Shield works by detecting **traffic anomalies** and filtering them before they hit your application. It uses a **global set of sensors** across AWS infrastructure and is **tightly integrated** with services like CloudFront, Route 53, and ELB.
-
-### Flow Overview
-
-1. **Traffic Hits AWS Edge Locations**  
-   - For services like CloudFront and Route 53, traffic first hits AWS’s global edge network  
-   - **Shield operates at the edge**
-
-2. **Anomaly Detection**  
-   - Monitors traffic volume, packet patterns, and sources  
-   - Looks for DDoS signatures: SYN floods, DNS query floods, UDP reflection, etc.
-
-3. **Automated Mitigation**  
-   - Deploys mitigation rules: blocks IPs, drops bad packets, rate-limits traffic
-
-4. **No Configuration Required**  
-   - No setup, no tuning — it’s just always on for supported services
-
----
-
-## What AWS Shield Standard Protects Against
-
-| **Attack Type**        | **Description**                                         |
-|------------------------|---------------------------------------------------------|
-| SYN Floods             | Overwhelms a server with half-open TCP connections      |
-| UDP Reflection Attacks | Spoofs traffic via open servers to amplify volume       |
-| NTP / DNS Amplification| Exploits misconfigured servers to send large data bursts|
-| Slowloris-style Attacks| Holds connections open indefinitely                     |
-| Volumetric Floods      | Large-scale bandwidth exhaustion attempts               |
-
-> These are blocked **before they even reach** your EC2 instance or application layer.
-
----
-
-## What It Doesn’t Do
-
-- Shield Standard **does NOT** handle **application-layer attacks** (e.g., HTTP floods, credential stuffing)  
-  → Use **AWS WAF** or **Shield Advanced** for that
-
-- No dashboards, alerts, or reports  
-
----
-
-
-## What Services Does It Protect?
-
-Shield Standard protects **only certain AWS services** — intentionally, so AWS can intercept traffic at the edge.
-
-| **Protected Service**    | **Notes**                                   |
-|--------------------------|---------------------------------------------|
-| Amazon CloudFront        | Full protection at global edge locations    |
-| Amazon Route 53          | DNS attack mitigation                       |
-
-| Elastic Load Balancers   | ALB, NLB, CLB — protected at network layer  |
-| AWS Global Accelerator   | Automatically benefits from Shield          |
-
-> Deploying your app **directly on EC2 with a public IP**?  
-> You’re **not protected** by Shield unless you use a fronting service like **CloudFront** or **ALB**.
-
----
-
-### What Shield Standard Won’t Help With
-
-- Brute-forcing login pages  
-- Bots flooding your checkout API  
-- Misconfigured firewalls exposing private endpoints  
-
-For those threats, you need:
-- **WAF**
-- **Rate-based rules**
-- **Shield Advanced**
-
----
-
-## Pricing Model
-
-| **Component**     | **Cost**                |
-|-------------------|-------------------------|
-| Shield Standard   | Free (100%)             |
-| Opt-in required?  | No                      |
-| Setup required?   | No                      |
-
-> One of its greatest strengths: you’re protected **by default** if you use AWS-native architecture.
-
----
-
-## Final Thoughts
-
-You don’t always notice **AWS Shield**.  
-That’s the point.
-
-It’s part of AWS’s **quiet baseline security** — absorbing common volumetric attacks and letting your applications breathe.
-
-If you’ve ever experienced **random traffic spikes but stayed online**… it may have been Shield at work.
-
----
-
-Still — **Shield Standard** is like having 24/7 bouncers outside your AWS nightclub.  
-It doesn’t handle the drama on stage, but it’s constantly **keeping the rabble from breaking down your front gate**.
-
-> Use it. Rely on it.  
-> But don’t assume it’s your entire defense.
-
+- No application-layer protection. HTTP floods and any attack made of valid-looking requests pass through untouched.
+- No dashboards, no attack reports, no alerts, and no access to the Shield Response Team. Those all belong to the Advanced tier.
+- Protection is confined to CloudFront, Route 53, Global Accelerator, and the elastic load balancers. Raw EC2 public IPs and unsupported entry points fall outside it.
+- No DDoS cost protection. If an attack scales your resources, the Standard tier does not absorb the resulting bill the way Advanced does.
+- You cannot tune it. There are no thresholds, rules, or knobs to adjust, so where Standard's automatic mitigation is not enough you must move up to Advanced plus WAF.

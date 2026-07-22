@@ -1,138 +1,39 @@
 # Instance Metadata Service (IMDS)
 
-## What Is the Service
+The Instance Metadata Service is a link-local endpoint at `http://169.254.169.254` reachable from inside every EC2 instance, letting the instance query facts about itself: instance ID, AMI, AZ, network interfaces, user data, tags (if enabled), and, critically, the temporary credentials for its attached IAM role. It is what makes credential-less access work: an app fetches short-lived role credentials at runtime instead of holding long-term keys. The thing to hold onto: IMDS is the instance's credential vending machine, so the entire security question is whether something that can forge an HTTP request from inside the box (an SSRF flaw, malware, a compromised dependency) can reach it and walk off with the role's credentials. IMDSv2 exists to close exactly that path.
 
-The **Instance Metadata Service (IMDS)** is a local web service running at `http://169.254.169.254` on every EC2 instance. It allows the instance to query information about itself, including:
+## How it works
 
-- **Instance ID, IP, AMI, availability zone**
-- **IAM Role credentials** (temporary)
-- **User data**
-- **Tags** (if configured)
-- **Network interfaces**
-- **Instance store metadata**
+- **IMDSv1** is a plain unauthenticated GET. Any code that can make an HTTP request from the instance, including an SSRF-vulnerable app tricked into requesting the URL, gets the role credentials. This is the Capital One 2019 pattern.
+- **IMDSv2** is session-oriented: a **PUT** first retrieves a token (`X-aws-ec2-metadata-token`), and that token must accompany every subsequent **GET**. Because SSRF flaws typically can only force a GET, not a PUT with custom headers, the token requirement blocks the classic SSRF credential grab.
+- **Hop limit** (`http-put-response-hop-limit`) caps how many network hops the token response can traverse. Set to **1** so a container on the instance cannot reach the host's IMDS, which is the container-SSRF defense.
+- **Token TTL** is set at request time (up to 6 hours) and the endpoint can be disabled entirely (`http-endpoint disabled`) on instances that need no metadata.
+- **Enforcement scope.** Set `http-tokens=required` per instance or in the launch template, set the **account-level IMDS default** (per Region) so new launches are IMDSv2-only, and enforce it org-wide and non-overridable with an Organizations **declarative policy** (`http_tokens_enforced`).
+- **Detection.** The `MetadataNoTokenRejected` CloudWatch metric counts rejected IMDSv1 calls, so you can confirm no software still depends on v1 before hard-enforcing. AWS Config and Inspector flag instances still allowing IMDSv1.
 
-This is crucial for bootstrapping and for **applications that need temporary AWS credentials** (e.g., when using an instance role instead of hardcoded secrets). It’s a key building block for “credential-less” access to AWS APIs from within EC2.
+## IMDSv1 vs IMDSv2
 
-But here’s the catch: **IMDS also introduces serious security risks if left unprotected** — attackers can use **SSRF** (Server-Side Request Forgery) or malware to query the metadata endpoint and extract IAM role credentials, enabling privilege escalation or lateral movement.
+| | IMDSv1 | IMDSv2 |
+|---|---|---|
+| Request flow | Single GET | PUT for token, then GET with token |
+| Auth | None | Session token required |
+| SSRF credential theft | Exposed | Blocked (SSRF can't do the PUT) |
+| Hop limit | N/A | Configurable (set 1 to block container access) |
+| Enforcement | `http-tokens=optional` | `http-tokens=required` |
 
----
+## What gets tested
 
-## Cybersecurity Analogy
+- **IMDSv2 is the SSRF answer, not a network control.** "App was tricked into fetching its own role credentials" or any Capital-One-style SSRF is remediated by requiring IMDSv2 and hop limit 1, not by a security group or NACL. Security groups cannot filter the link-local metadata address meaningfully.
+- **Hop limit 1 for containers.** When containers run on an EC2 host and must not reach the node's IMDS, the control is hop limit = 1 (plus IMDSv2). This is the recurring container-on-EC2 nuance.
+- **Account default vs declarative policy.** An account-level IMDS default makes new launches IMDSv2-only but is per-instance overridable. Only an Organizations **declarative policy** makes it non-overridable across the org, which is the "stays enforced as new accounts and instances appear" answer.
+- **Least privilege limits the damage.** IMDSv2 stops the theft; a tightly scoped instance role limits what stolen credentials could do if theft still occurs. Both appear as complementary correct actions.
+- **Detect before enforce.** Use the `MetadataNoTokenRejected` metric, Config, or Inspector to find IMDSv1 usage so enforcement does not break running software.
+- **Fargate is different.** On Fargate the credentials come from the ECS task endpoint at `169.254.170.2`, not IMDS at `169.254.169.254`, so IMDSv2 hop-limit hardening is an EC2 answer, not a Fargate one.
 
-Think of **IMDS** as a *lockbox* bolted inside your EC2 instance. It contains your badge, your name tag, and a one-time-use credential card that expires every few hours. You don’t carry these credentials in your pocket — you ask the *lockbox* when you need them.
+## Limitations
 
-But if an attacker inside the app finds a way to pry open that *lockbox* (via **SSRF** or insecure code), they can impersonate your identity in AWS.
-
-## Real-World Analogy
-
-Imagine **Winterday** sets up an EC2 to run a web server. The server needs access to S3, so the instance is given an **IAM role**. Instead of **hardcoding** long-term credentials, the app reaches into `169.254.169.254` and grabs temporary tokens from the metadata endpoint.
-
-Everything runs great… until a remote attacker exploits a bug in the web app that lets them make **arbitrary HTTP requests**.
-
-They quietly query:
-
-```bash
-curl http://169.254.169.254/latest/meta-data/iam/security-credentials/YourRole
-```
-
-Boom — they now have AWS credentials with full permissions. This isn’t theoretical — it’s how the **Capital One** breach happened.
-
----
-
-## How It Works (IMDSv1 vs IMDSv2)
-
-| Version  | Access Method                  | Vulnerability         | Protection Mechanism            |
-|----------|--------------------------------|------------------------|----------------------------------|
-| IMDSv1   | Simple HTTP GET request        | SSRF & no auth         | None                             |
-| IMDSv2   | Two-step PUT-then-GET w/ token | Token required (TTL)   | Enforced hop limit, token TTL    |
-
-### IMDSv2 Flow:
-
-1. App sends a **PUT** request to **IMDS** asking for a token (adds a hop limit).
-2. App includes that token in a **GET** request to fetch metadata (e.g., **IAM creds**).
-3. The token expires after a set **TTL** (default 6 hours).
-
-### Key Differences:
-
-- **IMDSv2 uses session-based tokens**
-- **Adds protection against SSRF attacks**
-- **Can block metadata access from misbehaving processes**
-
----
-
-## Security Risks of IMDSv1
-
-| Risk Type           | Exploit Example                                                                |
-|---------------------|---------------------------------------------------------------------------------|
-| **SSRF Attacks**    | Web server with SSRF bug fetches **IAM** role **creds** from metadata endpoint |
-✔️ Require IMDSv2 on all EC2s and launch templates
-✔️ Use minimal **IAM roles** (least privilege)
-
-✔️ Use **egress filtering** to block unknown IPs reaching `169.254.169.254`
-✔️ Use host-based firewalls (`iptables`) to restrict metadata access to known processes
-✔️ Use **EC2 Instance Profiles** instead of long-term creds
-✔️ Scan for IMDSv1 use with **Inspector**, **Config**, or custom **Lambda** checks
-
----
-
-## How to Enforce IMDSv2 (Examples)
-
-### Via AWS CLI:
-
-```bash
-aws ec2 modify-instance-metadata-options \
---instance-id i-12345678 \
---http-endpoint enabled \
---http-tokens required
-```
-
-### Or in Launch Template (recommended):
-
-- Set **Metadata Options**:
-  - **Http tokens**: required
-  - **Http endpoint**: enabled
-  - **Http put response hop limit**: 1
-
----
-
-## Pricing Models
-
-**IMDS** itself is **free** — it’s part of EC2.
-However, security tools like:
-
-- **AWS Config Rules** (to detect IMDSv1)
-- **Amazon Inspector** (to flag metadata risk)
-- **AWS Systems Manager Compliance Scans**
-
-...may have associated costs if enabled at scale.
-
----
-
-## Real-Life Example
-
-**Snowy** is managing 100 EC2s across 3 environments. After a **PenTest** report exposes one **dev** EC2 with **SSRF** and IMDSv1 enabled, **Snowy** rolls out:
-
-- A script to update all launch templates to require IMDSv2
-- An **AWS Config** rule to detect new instances allowing IMDSv1
-- A scheduled **Lambda** to scan metadata access logs for suspicious usage
-
-He also trains developers to use **boto3’s IMDSv2-compatible credential fetcher** so pipelines don’t break.
-
-Within a week, they’ve enforced IMDSv2 across the fleet and reduced metadata surface risk to near-zero — all without downtime.
-
----
-
-## Final Thoughts
-
-The Instance Metadata Service is powerful — but also dangerous if left wide open.
-
-**IMDSv2 is not just a recommendation — it’s your EC2 firewall for credentials.**
-
-Leaving IMDSv1 enabled in 2025 is like running a Linux box with **Telnet** and no firewall. It only takes one **curl from inside the box** to lose your cloud.
-
-✔️ Require IMDSv2
-✔️ Use IAM roles with least privilege
-✔️ Monitor access
-✔️ Educate your team
-
-**Security isn't about complexity. It's about defaults — and IMDSv2 should be yours.**
+- IMDSv2 raises the bar against SSRF but is not absolute. Code running directly on the instance (malware, an RCE with full request control) can perform the PUT and still retrieve credentials; the real containment is the scoped role.
+- The account-level default is per-instance overridable; without a declarative policy an operator or launch template can re-enable IMDSv1.
+- Hard-requiring IMDSv2 breaks any SDK, agent, or script that still makes IMDSv1 calls, so a detection pass is required first or workloads fail to get credentials.
+- Hop-limit and token settings apply to EC2 IMDS only. They have no effect on ECS task credentials, Lambda, or other credential sources.
+- Disabling the endpoint entirely is safest where metadata is unused, but breaks role-based credential retrieval, so it only fits instances that carry no role or supply credentials another way.

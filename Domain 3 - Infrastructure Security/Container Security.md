@@ -1,168 +1,44 @@
-# Container Security
+# Compute Security in AWS
 
-## What Is Container Security
+Compute security is the set of protections applied to the layer that runs code: EC2 (virtual machines), ECS/EKS/Fargate (containers), and Lambda (serverless). What you own shifts by service under the shared responsibility model, but the concern is constant: the compute unit holds an identity, sits on a network, and touches data, so a compromised one is the launch point for exfiltration, lateral movement, and persistence. The thing to hold onto: compute security is the same four questions at every layer, what identity does it carry (IAM role), what can it reach (network), what does it run (image/OS/runtime), and can you see it (logging), and the exam usually tests which lever applies to which compute type and where the responsibility line sits.
 
-Container security is the practice of securing everything involved in the lifecycle of containers — from the build stage to runtime, including the image, infrastructure, orchestration platform, and the supply chain. Containers offer lightweight, portable environments to run applications — but they also bring new attack surfaces:
+## How it works
 
-- Vulnerable base images  
-- Insecure container runtimes  
-- Poorly isolated workloads  
-- Overprivileged containers  
-- Insecure orchestration (like Kubernetes)  
-- Secrets baked into images or environment variables  
-- Unscanned dependencies and CI/CD pipelines
+- **Identity per compute unit.** Every unit gets its own role, least privilege, never an admin policy and never long-lived keys. **EC2**: instance profile. **ECS**: task role (per task, distinct from the task *execution* role that pulls images and writes logs). **Lambda**: execution role. **EKS**: **IRSA** or **EKS Pod Identity**, both yielding short-lived pod-scoped credentials with no static secrets. Node IAM roles are the anti-pattern because every pod on the node inherits them.
+- **Network boundaries.** VPC, private subnets for sensitive workloads, security groups scoped by port/protocol/source, NACLs for coarse subnet rules, VPC endpoints so service traffic (S3, DynamoDB, Secrets Manager) never traverses the internet, TLS on intra-service calls.
+- **Access to the host.** Replace SSH with **SSM Session Manager** (no open port 22, no key management, full session logging) or EC2 Instance Connect. Disable password auth, restrict root, enforce **IMDSv2**.
+- **OS and image hygiene.** Hardened base AMIs, **SSM Patch Manager** on a cadence, **Amazon Inspector** for continuous CVE scanning of EC2, container images in ECR, and Lambda functions. Minimal base images, **read-only root filesystems**, drop unneeded Linux capabilities, never run containers as root, no host filesystem mounts.
+- **Secrets.** Out of environment variables and images. Pull from **Secrets Manager** or **SSM Parameter Store** at runtime; encrypt Lambda env vars with KMS; mount into pods via the Secrets Store CSI driver. Never log decrypted secrets.
+- **Encryption.** EBS encryption for EC2, Lambda ephemeral (`/tmp`) storage encrypted with an AWS-managed or customer key, EFS/ECS volumes encrypted, data fetched to the container rather than baked into the image.
+- **Detection.** CloudTrail all-Region, centralized CloudWatch Logs, VPC Flow Logs, **GuardDuty** (EC2 port scanning and crypto-mining, credential exfiltration, anomalous IAM calls, EKS audit and runtime findings, Lambda network anomalies), findings centralized in **Security Hub**, alarms on high CPU (mining), unexpected egress, and AssumeRole spikes.
+- **Blast-radius design.** Immutable, replaceable instances in Auto Scaling groups (destroy and rebuild rather than patch a compromised host), one Lambda per responsibility, per-namespace/per-task role scoping, segmentation so one popped unit cannot reach far.
 
-In AWS, containers usually run on:
+## Security model by compute type
 
-- Amazon ECS (Elastic Container Service)  
-- Amazon EKS (Elastic Kubernetes Service)  
-- AWS Fargate (serverless containers)  
+| | EC2 | ECS / EKS on EC2 | Fargate | Lambda |
+|---|---|---|---|---|
+| You manage | OS, patching, runtime, app, IAM | Container config, runtime, task/pod IAM, node OS (EC2 mode) | Container config, task/pod IAM | Function code, IAM, env config |
+| AWS manages | Hypervisor, hardware | Underlying infra | OS, node, isolation | Runtime, patching, scaling |
+| Identity mechanism | Instance profile | Task role / IRSA / Pod Identity | Task role / Pod Identity | Execution role |
+| Host access | SSM Session Manager (no SSH) | Node via SSM; no exec into prod pods | No host access | No host access |
+| Patch responsibility | You (Patch Manager) | You for nodes; images you rebuild | Image rebuild only | AWS |
+| CVE scanning | Inspector (instance) | Inspector (ECR image + node) | Inspector (image) | Inspector (function) |
 
-And container images are stored in **Amazon ECR** (Elastic Container Registry).
+## What gets tested
 
-If you don't secure containers from build to runtime, attackers can exploit:
+- **Where the responsibility line falls.** Fargate and Lambda move OS patching to AWS; EC2 and EKS-on-EC2 nodes keep it with you. A "who patches the OS" question is answered by the compute type, not by a tool.
+- **Task role vs execution role (ECS).** The **task role** is what the app code assumes to call AWS APIs; the **execution role** lets the agent pull the image and ship logs. Scenarios swap these to see if you know which grants app-level access.
+- **IRSA vs Pod Identity (EKS).** Both give per-pod short-lived credentials. IRSA uses OIDC federation and works across EKS, EKS Anywhere, and self-managed clusters but needs an OIDC provider and per-cluster trust policy. Pod Identity uses a simpler association API and an in-cluster agent, is EKS-in-cloud only, and adds session tags. Either beats node IAM roles or static keys in a manifest.
+- **SSH vs Session Manager.** "Access an instance without opening inbound ports or managing keys" is SSM Session Manager. It also gives you an auditable session log, which a bastion + SSH does not by default.
+- **Secrets not in env vars.** Leaked-credential-in-logs scenarios point to Secrets Manager/Parameter Store retrieval at runtime plus KMS-encrypted env vars, not "rotate the key" alone.
+- **IMDSv2.** Enforcing IMDSv2 is the control that defeats SSRF-driven credential theft from the instance metadata endpoint. Recognize it as the answer to "app was tricked into fetching its own role credentials."
+- **Immutable replacement over in-place fix.** For a compromised instance, contain then destroy-and-replace from a known-good AMI in an ASG. Rebuilding is the containment pattern, not SSHing in to clean it.
 
-- Public base images with known CVEs  
-- Lack of image signing or provenance  
-- Misconfigured Kubernetes roles (RBAC)  
-- Unencrypted secrets  
-- Outdated libraries inside containers  
-- Or even host escape into the EC2/Fargate host
+## Limitations
 
----
-
-## Cybersecurity and Real-World Analogy
-
-### Cybersecurity Analogy
-
-Think of containers like shipping containers on a cargo ship.
-
-If the container itself is tampered with at the source (build stage), or if the seals are broken (image signature missing), or if customs checks are skipped (no vulnerability scans), then you’re blindly shipping in potentially dangerous goods.
-
-And if the cargo ship (host EC2) doesn’t enforce compartmentalization between containers, one bad actor can compromise the entire vessel.
-
-### Real-World Analogy
-
-Imagine you're renting booths to food vendors at a massive festival. Each vendor (container) should be isolated — with its own supplies, burners, and rules.
-
-But if you allow one vendor to walk into another's booth, or share a burner, or leave raw meat next to cooked food (insecure shared resources), you're inviting cross-contamination.
-
----
-
-## How It Works / What to Secure
-
-### 1. Image-Level Security
-
-- Use minimal base images (e.g., distroless, Alpine)  
-- Scan images continuously for vulnerabilities (CVEs)  
-- Sign images and enforce image provenance  
-- Remove hardcoded credentials from Dockerfiles  
-- Store images in **Amazon ECR**, which supports:  
-  - Vulnerability scanning (w/ Inspector)  
-  - Immutable tags  
-  - Lifecycle policies for stale images  
-
-### 2. Build Pipeline Security
-
-- Use CI/CD scanning tools to catch issues early (e.g., Trivy, Clair, Checkov)  
-- Enforce linting + policy-as-code (e.g., OPA/Gatekeeper for Kubernetes)  
-- Avoid pulling images from untrusted sources  
-
-### 3. Runtime Security
-
-- Drop unnecessary Linux capabilities (`cap-drop`)  
-- Run containers as non-root  
-- Use read-only filesystems where possible  
-- Set resource limits (CPU, memory)  
-- Monitor runtime behavior (unexpected processes, open ports, etc.)  
-
-### 4. Orchestration Security (EKS/Kubernetes)
-
-- Use RBAC to restrict access to Kubernetes resources  
-- Enable audit logging and VPC Flow Logs  
-- Use PodSecurityPolicies or OPA/Gatekeeper  
-- Rotate secrets via AWS Secrets Manager or SSM Parameter Store  
-- Avoid exposing services via public LoadBalancers unless needed  
-- Limit node access to specific container registries only  
-
-### 5. Host and Network Security
-
-- Harden EC2 or Fargate base hosts  
-- Enforce Security Groups per ECS task or EKS pod  
-- Use Service Mesh (like App Mesh) for fine-grained traffic control and mTLS  
-- Enable encryption in transit and at rest  
-
----
-
-## Pricing Models (AWS)
-
-| AWS Component        | Pricing Considerations                                  |
-|----------------------|----------------------------------------------------------|
-| Amazon ECR           | Pay for GB stored + GB data transferred                  |
-| Inspector (ECR scan) | Charged per image scan                                   |
-| EKS                  | $0.10/hour per cluster (plus EC2 or Fargate costs)       |
-| ECS                  | Free; pay for compute (EC2 or Fargate)                   |
-| Fargate              | Pay per vCPU and memory used                             |
-| Secrets Manager      | Charged per secret + API calls                           |
-| VPC Logs / GuardDuty / CloudTrail | Charged by ingestion, storage, and queries |
-
----
-
-## Other Important Notes
-
-- **Amazon Inspector** now supports ECR image scanning natively:  
-  - It integrates with your repositories and automatically scans pushed images.  
-  - It highlights CVEs and provides remediation steps.  
-
-- **Kubernetes audit logs** can be sent to CloudWatch Logs or S3 + Athena for SIEM-like analysis.
-
-- **AWS Security Hub** can aggregate findings from EKS, Inspector, GuardDuty, IAM Access Analyzer, etc.
-
-- **AWS Bottlerocket** is a special Linux OS designed for containers — secure by default.
-
-
-- **IAM Roles for Service Accounts (IRSA)** in EKS lets your containers get temporary credentials scoped just to them (*least privilege*).
-
----
-
-## Real-Life Snowy-Style Example
-
-Let’s say **Winterday** is deploying a SaaS analytics platform on **EKS**. Each customer gets their own containerized microservice.
-
-If Winterday just pulls a random open-source container image with `apt-get` and hardcodes a secret token in an environment variable — and skips image scanning — then even a small vulnerability (say, outdated `openssl`) opens the door to an attacker breaking out and accessing logs or secrets.
-
-Instead, **Snowy** enforces:
-
-- Signed base images from a private ECR repo  
-- Inspector scans on push  
-- Least privilege IRSA roles  
-- PodSecurityPolicies to deny `hostPath` mounts  
-- Secrets fetched at runtime from AWS SSM with KMS  
-- All traffic goes through App Mesh with TLS enforcement  
-
-**Result?** The blast radius is minimized. Even if one container gets hit, it can't pivot or escalate.
-
----
-
-## Final Thoughts
-
-Containers aren’t secure by default — they’re just smaller and faster VMs with more moving parts.
-
-The ephemeral nature of containers doesn’t remove the need for diligence — it *increases* it.
-
-You need **layered security at every stage**:  
-`build → image → registry → runtime → orchestration → network`
-
-In AWS, use:
-
-- **ECR + Inspector**  
-- **IAM**  
-- **Fargate / EKS / ECS**  
-- **Secrets Manager**  
-- **GuardDuty + Security Hub**  
-- **CloudWatch, VPC Flow Logs, Athena**  
-
-as your toolbox — and wrap them together with governance, alerting, and tight privilege boundaries.
-
-Container security is a **shared responsibility**: AWS handles infra, *you harden the workloads*.
-
+- Least-privilege roles are only as good as their scope. An over-broad instance profile or execution role plus IMDSv1 or a leaked token is the standard path from one unit to account compromise; the role is the blast radius.
+- GuardDuty and Inspector detect, they do not prevent. They shorten time-to-detection but a runtime exploit still executes; prevention is hardening, network isolation, and least privilege.
+- Fargate and Lambda remove OS patching but not application-dependency risk. Vulnerable libraries in your image or function still need Inspector scanning and rebuilds; "serverless" is not "patch-free."
+- Session Manager logging and VPC Flow Logs are opt-in and cost money at volume. Absence of logs is an absence of forensics, so the control has to be enabled before the incident, not after.
+- Container isolation on shared EC2 nodes is not a hard boundary. Privileged containers, host mounts, or `CAP_SYS_ADMIN` allow container-to-host escape; Fargate's per-task isolation is the stronger boundary when tenancy separation matters.
+- Immutable-replacement design assumes stateless compute. Stateful workloads need the data and secrets externalized first, or "destroy and rebuild" loses state along with the attacker.

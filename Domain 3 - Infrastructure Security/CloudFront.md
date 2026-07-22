@@ -1,171 +1,46 @@
 # Amazon CloudFront
 
----
+Amazon CloudFront is AWS's content delivery network: a globally distributed cache that serves static and dynamic content from 600+ edge locations close to the viewer. For the exam it matters less as a performance tool and more as the internet-facing security perimeter. It terminates TLS at the edge, is the attachment point for AWS WAF and Shield, enforces geo-restrictions, hides origins behind Origin Access Control and VPC Origins, and produces the first access logs an incident touches. The thing to hold onto: CloudFront is the edge control plane, the layer where you authenticate viewers (signed URLs/cookies), authorize the origin (OAC/VPC Origins), inspect traffic (WAF), and absorb volumetric attacks (Shield), and questions test which of those four jobs the scenario is really asking for.
 
-## What Is the Service (And Why It’s Important)
+## How it works
 
-**Amazon CloudFront** is AWS’s **Content Delivery Network (CDN)** — a globally distributed system that caches and serves content (static or dynamic) close to users to reduce latency and improve speed.
+- **Origins and OAC.** The origin is the source (S3, ALB, NLB, EC2, any custom HTTP endpoint). For an S3 origin, **Origin Access Control (OAC)** signs CloudFront-to-origin requests with SigV4 so the bucket can be locked to CloudFront only and stays private. OAC is now the sole option: OAI is legacy and, as of March 2026, cannot be attached to new distributions.
+- **VPC Origins.** For compute origins (ALB, NLB, EC2) in private subnets, **VPC Origins** lets CloudFront reach them directly without any public IP, removing internet exposure at the origin entirely. For custom origins that must stay public, verify traffic with the CloudFront **managed prefix list** or a secret custom header so only CloudFront can reach them.
+- **Distributions and behaviors.** A distribution holds routing, caching, logging, and security config. **Behaviors** are per-path rules choosing origin, cache policy, WAF association, allowed methods, header/query forwarding, and any **CloudFront Functions** (lightweight, viewer-event, sub-ms) or **Lambda@Edge** (heavier, all four events, full runtime) logic.
+- **Viewer authentication.** **Signed URLs** (one file) and **signed cookies** (many files) grant time-limited, user-specific access to private content. Use **trusted key groups**, not the legacy account-wide trusted signers.
+- **TLS.** Enforce HTTPS with a redirect or HTTPS-only viewer policy and a modern minimum-TLS security policy. The default `*.cloudfront.net` certificate pins the minimum to TLS 1.0; a custom ACM certificate (in **us-east-1** for CloudFront) is required to enforce TLS 1.2+.
+- **WAF and Shield.** Attach a WAF Web ACL to the distribution for SQLi/XSS managed rules, rate-based rules, and bot control at the edge, before traffic reaches the origin. **Shield Standard** is automatic and free; **Shield Advanced** adds DRT support and cost protection.
+- **Geo-restriction.** Allow or block by viewer country at the distribution level. For finer control use a WAF geo-match rule.
+- **Field-level encryption.** Encrypt specific form fields (for example a card number) at the edge with a public key so even CloudFront edge nodes and downstream services never see plaintext; only the component holding the private key can decrypt.
+- **Logging.** Standard access logs to S3 (every request), real-time logs to Kinesis Data Streams (near-instant to a SIEM), WAF logs via Firehose, Shield metrics to CloudWatch.
 
-But CloudFront is more than just a performance booster. It’s a **security perimeter** and strategic **edge control point**:
+## CloudFront vs adjacent edge and origin-protection options
 
-- Terminates **SSL/TLS** connections
-- Blocks malicious traffic via **AWS WAF**
-- Enforces **geo-restrictions**
-- **Logs** detailed access records
-- Serves as the **edge layer** in zero-trust architectures
+| Mechanism | Job | Use when |
+|---|---|---|
+| OAC | Lock an S3 origin to CloudFront only (SigV4) | Private S3 content, SSE-KMS objects, PUT/DELETE |
+| VPC Origins | Reach ALB/NLB/EC2 in a private subnet with no public IP | Compute origin must not be internet-reachable |
+| Managed prefix list / custom header | Restrict a public custom origin to CloudFront | Origin stays public but only CloudFront should hit it |
+| Signed URLs / cookies | Time-limited, per-user viewer access | Paid or private content per viewer |
+| WAF on CloudFront | L7 filtering (SQLi, XSS, bots, rate limit) | Application-layer attacks |
+| Shield Advanced | Managed DDoS + DRT + cost protection | High-value internet-facing targets |
+| API Gateway | Managed API front door with auth/throttle | API, not cacheable content delivery |
 
-> CDNs like CloudFront are often the **first layer exposed to the internet**, making them a critical layer for performance, **security posture**, and **incident visibility**.
+## What gets tested
 
----
+- **OAC over OAI, always.** Any "restrict the S3 bucket to CloudFront" answer is OAC. OAI is the wrong/legacy choice, and specifically OAI cannot authenticate to **SSE-KMS** encrypted objects or support PUT/DELETE, which OAC does. Bucket policy still has to grant the CloudFront service principal.
+- **Hide a compute origin.** "ALB/EC2 must not be reachable from the internet, only through CloudFront" is **VPC Origins** (private subnet) or, for a public origin, the managed prefix list plus a secret header. Not a security group rule alone, which does not identify CloudFront.
+- **Signed URLs vs OAC.** These solve different problems and are a classic trap. OAC controls CloudFront-to-origin (keeps the bucket private). Signed URLs/cookies control viewer-to-CloudFront (who may request the object). A private-paid-content scenario usually needs both.
+- **Where TLS and WAF live.** CloudFront terminates viewer TLS and is where the Web ACL attaches for edge filtering. WAF on CloudFront is global scope (deployed via us-east-1), distinct from a regional WAF on an ALB or API Gateway.
+- **Field-level encryption vs TLS.** TLS protects data in transit to the edge; field-level encryption keeps a specific field encrypted through the edge and backend until a private-key holder decrypts it. When the requirement is "CloudFront and intermediate services must never see the plaintext field," it is field-level encryption, not TLS.
+- **Custom certificate for modern TLS.** Enforcing TLS 1.2+ requires a custom ACM cert (us-east-1); the default CloudFront domain allows TLS 1.0. Watch for this in a "why is TLS 1.0 still accepted" question.
+- **Trusted key groups.** The current mechanism for signed URLs/cookies is trusted key groups, not the root-account trusted-signer model.
 
-## Cybersecurity Analogy
+## Limitations
 
-Think of your origin servers (S3, EC2, ALB, etc.) as a **secure building**, and CloudFront as a **chain of security gates** in every major city.
-
-Each gate can:
-- ✅ Check IDs (auth tokens, headers, IPs)
-- ✅ Block bad actors (WAF rules)
-- ✅ Allow only guests from specific regions (geo-blocking)
-- ✅ Keep an access log
-
-Your building remains **hidden, clean, and protected** — while the gates handle the incoming traffic and threats.
-
-## Real-World Analogy
-
-CloudFront is like a **worldwide network of delivery lockers**.
-
-You store your product (video, image, HTML page, API response) in the **closest locker to the customer**.
-
-The customer:
-- Gets **faster access**
-- Doesn’t wait for **cross-continent delivery**
-- Enjoys **secure, auditable delivery**
-- Can be **tracked, validated, and blocked** if needed
-
-If something suspicious happens (too many hits from one region, bot traffic, etc.), you can **lock the locker** or **reroute traffic** elsewhere.
-
----
-
-## Key Concepts & Flow
-
-### Origins
-The original data sources (e.g., S3, ALBs, EC2, custom domains).  
-CloudFront **pulls** from the origin and **caches** the content temporarily.
-
-### Edge Locations
-600+ global locations that:
-- Cache and serve content
-- **Terminate SSL**
-- **Run WAF rules**
-- **Log requests**
-
-### Distributions
-Configurations that define:
-- Request routing
-- Caching behavior
-- Logging
-- Security settings
-
-### Behaviors and Rules
-Per-path configurations that define:
-- Which **origin** to use
-- Caching strategies
-- WAF associations
-- Header/query forwarding
-- Allowed HTTP methods
-- Lambda@Edge or Function@Edge logic
-
----
-
-## Security Features
-
-| **Security Feature**        | **What It Does**                                                                 |
-|----------------------------|-----------------------------------------------------------------------------------|
-| **HTTPS Only**             | Forces all viewer traffic to use TLS                                            |
-| **Signed URLs/Cookies**    | Restrict access to private content with expiration and user specificity         |
-| **Geo-restrictions**       | Allow/block access based on viewer’s country                                    |
-| **AWS WAF Integration**    | Blocks common exploits like SQLi/XSS, bad bots, and rate-based attacks          |
-| **Shield & Shield Advanced** | DDoS protection with proactive mitigation and support                           |
-| **Access Logs**            | Captures detailed request logs to S3                                            |
-| **Origin Access Control (OAC)** | Restricts access to origins — replaces legacy OAI                          |
-| **Field-Level Encryption** | Encrypt specific HTTP fields before they hit the backend                        |
-
----
-
-## CloudFront Logging Options
-
-| **Log Type**          | **Destination**                     | **Why It Matters**                                              |
-|----------------------|--------------------------------------|-----------------------------------------------------------------|
-| **Standard Access Logs** | S3 Bucket                        | Logs every viewer request (IP, URI, response code, etc.)        |
-| **Real-Time Logs**    | Kinesis Data Streams                | Near-instant delivery to SIEM/SOC tools                         |
-| **WAF Logs**          | Kinesis Firehose → S3/Elasticsearch | See which requests triggered which WAF rules                    |
-| **Shield Metrics**    | CloudWatch                          | Track attack volume, mitigations, anomalies                     |
-
----
-
-## Typical Use Cases
-
-| **Use Case**             | **How CloudFront Helps**                                                 |
-|--------------------------|---------------------------------------------------------------------------|
-| Static Websites (S3)     | Fast global delivery + HTTPS + access control                            |
-| API Protection           | WAF rules + IP filtering + low-latency edge delivery                     |
-| Private Content Delivery | Signed URLs, cookie-based auth                                           |
-| DDoS Mitigation          | Combines Shield, WAF, geo-blocking, and rate limits                      |
-| Zero-Trust Microservices | Origin access restricted to CloudFront only                              |
-| Compliance & Logging     | Full HTTP logs, real-time analytics, audit visibility                    |
-
----
-
-## Pricing Model
-
-CloudFront pricing is **usage-based**:
-
-- **Data Transfer Out**: Charged by GB, region-dependent
-- **HTTP/HTTPS Requests**: Priced per 10,000 or per million
-- **Invalidation Requests**: First 1,000/month free
-- **Real-Time Logs**: Charged per record sent to Kinesis
-- **WAF & Shield**: Billed separately (if enabled)
-
-> Example:  
-> If your app serves **1 TB/month** + **100k HTTPS requests**:
-> - You pay for **data transfer out**
-> - You pay for **HTTPS requests**
-> - Any log delivery or WAF usage adds to the total
-
----
-
-## Real-Life Security Example
-
-**Winterday’s e-commerce platform** hosts product images in S3 behind CloudFront.  
-One night, they notice:
-
-- 🔺 Traffic spike from a **single IP in Eastern Europe**
-- 🔺 All requests go to `/images/private/`
-- 🔺 User-agent is `curl/7.68.0`
-- 🔺 90% of requests fail with **403 errors** (invalid signed URL)
-
-### Their defenses:
-
-- ✅ **CloudFront WAF** blocks rate over 2,000 reqs / 5 min  
-- ✅ TLS 1.2+ enforced  
-- ✅ IP range blocked  
-- ✅ Cached objects invalidated  
-- ✅ Signed URL keys rotated  
-- ✅ **Lambda@Edge** deployed for deeper token validation  
-
-**Result**: Threat neutralized before it reached the origin.
-
----
-
-## Final Thoughts
-
-**CloudFront isn’t just a CDN — it’s your programmable edge firewall, global cache, and shielded gateway.**
-
-It gives you:
-- Fast content delivery  
-- Strong perimeter defense  
-- Real-time visibility  
-- Regional control  
-- Edge-layer customization
-
-> If your app touches the internet, **CloudFront is your first line of performance and security**.
+- CloudFront and its ACM certificate are effectively global but anchored in **us-east-1**: the custom cert and the global WAF Web ACL must be created there, a common deployment gotcha.
+- OAC/VPC Origins hide the origin from the internet but do not authenticate the *viewer*. Without signed URLs/cookies or WAF, anyone can still pull public objects through the distribution.
+- Shield Standard covers network and transport (L3/L4) volumetric attacks only. Application-layer floods, scraping, and injection still require WAF and rate-based rules; Shield alone does not answer an L7 scenario.
+- Cache invalidations propagate and are only free for the first 1,000 paths per month; rotating content by invalidation at scale has cost and latency. Versioned object names are the cheaper pattern.
+- Field-level encryption covers a small number of specified fields, not whole payloads, and adds key-management overhead. It is not a substitute for encrypting the datastore.
+- CloudFront does not currently support S3 Express One Zone (directory buckets) as a direct origin, and a same-name S3 origin moved to a new SigV4 Region can take up to an hour for OAC/OAI records to update.

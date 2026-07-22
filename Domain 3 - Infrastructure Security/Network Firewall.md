@@ -1,191 +1,43 @@
 # AWS Network Firewall
 
-## What Is It
+AWS Network Firewall is a managed, stateful, scalable L3-L7 firewall you deploy inside a VPC to inspect and filter traffic that route tables steer through it. It does stateful connection tracking, deep packet inspection via a **Suricata**-compatible IDS/IPS engine, domain/FQDN filtering (HTTP Host and TLS SNI), IP/port/protocol filtering, optional TLS inspection, and central logging to CloudWatch, S3, or Kinesis. The thing to hold onto: Network Firewall is the VPC's managed IDS/IPS for north-south and east-west traffic, the control that inspects payloads and blocks domains/exfiltration where security groups and NACLs (which only see IP/port) cannot, and it only sees traffic that routing sends to its endpoint.
 
-AWS Network Firewall is a fully managed Layer 3/Layer 4/Layer 7 firewall built directly into your VPCs. It provides:
+## How it works
 
-- **Stateful traffic filtering** (track connections, not just packets)  
-- **Deep packet inspection (DPI)** using Suricata rules  
-- **Domain-based blocking** (FQDNs like `*.malware.com`)  
-- **IP, port, protocol filtering**  
-- **TLS inspection support**  
-- **Central logging** to CloudWatch, S3, or Kinesis  
+- **Deployment.** A **firewall endpoint** lives in a dedicated firewall subnet per AZ. You edit VPC and IGW route tables to force traffic through that subnet (distributed, centralized-with-Transit-Gateway, or inspection-VPC patterns). Traffic that is not routed to the endpoint is never inspected.
+- **Firewall, policy, rule groups.** The **firewall** binds to subnets; the **firewall policy** holds ordered stateless and stateful rule group references plus logging and default actions; **rule groups** are the reusable rule sets.
+- **Stateless engine (runs first).** Examines each packet in isolation on the 5-tuple. Actions: `pass`, `drop`, or `aws:forward_to_sfe` (forward to the stateful engine). AWS best practice is to keep stateless rules minimal and set the stateless default to forward everything to the stateful engine, because stateless rules take precedence and can cause asymmetric-flow problems.
+- **Stateful engine (Suricata).** Tracks connection state and inspects deeper. Three rule forms: **domain list** (allow/deny FQDNs via Host/SNI), **5-tuple**, and raw **Suricata** signatures. Suricata action order is `pass`, then `drop`, then `reject`, then `alert`, with optional priority, and strict-order mode lets you set a stateful default action. Supports the `geoip` keyword for country filtering.
+- **Default behavior.** The stateful engine defaults to allow (like a permit-by-default posture), the opposite of a security group's default deny. You must add deny/alert rules or a strict default drop; leaving it open inspects nothing useful.
+- **TLS inspection.** Optionally decrypts, inspects, and re-encrypts flows using a certificate (ACM), needed to see inside HTTPS for exfil detection. It adds latency and cost and is meant for high-risk egress paths, not inbound web traffic (WAF handles inbound).
+- **Managed rule groups.** AWS-managed threat lists and an **active threat defense** group, plus Marketplace rule groups, so you are not hand-writing every signature.
+- **Logging.** Alert and flow logs to CloudWatch/S3/Kinesis; findings can normalize into Security Hub, and Athena queries the S3 logs.
 
-**Why it matters in security:**  
-Most AWS environments are secure *inside* the cloud, but porous *at the edges*. Network Firewall acts as a security perimeter around your VPCs — not just blocking bad IPs, but inspecting payloads, blocking outbound exfiltration, and defending East-West traffic between subnets, workloads, and even Regions.
+## Network Firewall vs the other network controls
 
-Unlike Security Groups (which are stateless per packet), Network Firewall can say:
+| | Network Firewall | Security group | NACL | WAF | Gateway Load Balancer |
+|---|---|---|---|---|---|
+| Layer | L3-L7, stateful + DPI | L3/L4 stateful | L3/L4 stateless | L7 HTTP/S | Transparent bump-in-wire |
+| Inspect payload / domains | Yes (Suricata, SNI/Host) | No | No | Yes (HTTP only) | Depends on appliance |
+| Deny by domain / signature | Yes | No | No | Managed rules | Via third-party appliance |
+| Scope | VPC traffic via routing | ENI | Subnet | CloudFront/ALB/API GW | Inserted appliance path |
+| Best for | Egress control, IDS/IPS, east-west | Per-resource allow | Subnet-wide deny | App-layer web attacks | Inserting 3rd-party NGFW |
 
-> “That connection looks like outbound beaconing to a C2 server. Block it.”  
-> “This S3 access is wrapped in a Tor tunnel. Deny and log it.”
+## What gets tested
 
-It’s your **cloud IDS/IPS**, built into the fabric.
+- **Payload/domain filtering that SG and NACL cannot do.** "Block outbound to `*.badmalware.net`," "stop DNS-tunneling exfil," "detect a Cobalt Strike beacon," or "block egress by domain" all point to Network Firewall stateful rules, because SGs and NACLs only match IP/port.
+- **Egress and east-west control.** Network Firewall is the answer for centralized outbound filtering and inter-VPC (east-west) inspection, typically in an inspection VPC behind a Transit Gateway. WAF and Shield are inbound/edge, not egress.
+- **Network Firewall vs WAF.** WAF inspects inbound HTTP/S at CloudFront/ALB/API Gateway (SQLi, XSS). Network Firewall inspects arbitrary VPC traffic at L3-L7 including egress. "Filter inbound web app attacks" is WAF; "control what the VPC can talk out to" is Network Firewall.
+- **Network Firewall vs Gateway Load Balancer.** GWLB inserts and scales third-party virtual appliances transparently. Network Firewall is AWS's own managed engine. When the requirement names a third-party/partner NGFW appliance, that is GWLB; when it is native managed inspection, that is Network Firewall.
+- **Routing is mandatory.** The firewall only sees what route tables send it. A "traffic is bypassing the firewall" scenario is a route table not pointing at the firewall endpoint.
+- **Stateful default is allow.** Unlike a security group, Network Firewall passes by default, so protection requires explicit deny/alert rules or a strict-order default drop.
+- **Not a DDoS control.** Network Firewall filters and inspects but does not mitigate volumetric DDoS; that is Shield.
 
----
+## Limitations
 
-## Cybersecurity Analogy
-
-Imagine you’ve got a smart border checkpoint.
-
-- **Security Groups** = metal detectors at individual doors  
-- **NACLs** = security guards checking each ID without memory  
-- **Network Firewall** = AI-powered border patrol checkpoint:
-
-  - Knows if someone is coming back too often  
-  - Detects payloads that match known threat signatures  
-  - Has a clipboard of banned destinations  
-  - Allows safe commerce while blocking contraband  
-
-It watches the **flows**, not just the **doorframe**.
-
-## Real-World Analogy
-
-Think of a smart customs gate at an international airport.
-
-- Checks passports (IP rules)  
-- Flags suspicious behavior patterns (stateful inspection)  
-- Detects banned substances (DPI)  
-- Redirects flagged people to secondary inspection (log + alert)  
-
-And best of all? **You don’t have to run the gate** — it scales automatically.
-
----
-
-## How It Works
-
-AWS Network Firewall is deployed inside a dedicated VPC subnet called a **firewall subnet**, within a **VPC firewall endpoint**. It acts as a central inspection point for traffic.
-
-### Key Components
-
-| Component         | Description                                                                 |
-|-------------------|-----------------------------------------------------------------------------|
-| **Firewall**       | Logical resource that holds rules, endpoints, logging, etc.                |
-| **Firewall Policy**| Collection of rule groups + logging config                                 |
-| **Rule Groups**    | Stateless or Stateful (Suricata rules, domain rules, or IP filters)        |
-| **Firewall Endpoint**| The network interface inside a subnet that handles traffic              |
-| **Routing Integration** | Route tables must redirect traffic to the firewall subnet             |
-
----
-
-## Types of Rule Groups
-
-| Type         | Use Cases                                                                 |
-|--------------|---------------------------------------------------------------------------|
-| **Stateless** | Simple packet filtering (IP, port, protocol) — used at the front line     |
-| **Stateful**  | Deep inspection (Suricata, DNS, domain, payload) — sees full flow         |
-| **Domain-based** | Block access to known bad domains (e.g., `*.crypto-malware.net`)     |
-| **Suricata rules** | Full IDS/IPS syntax — allow/deny/mirror based on DPI               |
-
-**Example Stateless Rule:**  
-“Drop all outbound TCP port 6667 (IRC)”
-**Example Stateful Rule:**  
-“Alert if payload matches known Cobalt Strike beacon signature”
-
----
-
-## SnowySec Traffic Flow (Simplified)
-
-
-Let’s say **SnowySec** has a tiered VPC with public and private subnets:
-
-- Firewall Subnet sits between **NAT Gateway** and **Internet Gateway**
-- Route table sends outbound Internet traffic from private subnets → Firewall
-
-### 🔹 Network Firewall Applies:
-
-- **Stateless rule:** Deny all TCP to `198.51.100.10`  
-- **Stateful rule:** Alert on DNS lookups to `*.coinminer.cx`  
-- **TLS rule:** Block SSL traffic to IPs without valid certs  
-
-- **Logging:** All blocked/allowed connections sent to S3  
-- **Alerting:** Findings forwarded to **Security Hub**
-
-Result:  
-SnowySec has **inline threat detection, exfiltration control, and an audit trail** — without deploying any EC2-based IDS.
-
----
-
-## Use Cases
-
-
-| Use Case                           | Feature Used                                           |
-|------------------------------------|--------------------------------------------------------|
-| Stop known bad domains             | Stateful domain list rule group (`*.tor2web.com`)      |
-
-| Prevent IRC-based C2 traffic       | Stateless deny TCP port 6667                           |
-| TLS inspection for HTTPS exfil     | TLS-based Suricata rules (deep inspection)            |
-| Block high-risk geo IP ranges      | IP deny rules (stateless)                              |
-| Alert on malware signature payload | Stateful Suricata rule w/ logging                      |
-| Detect DNS tunneling exfil         | Stateful DNS packet rule + resolver logs              |
-| Isolate VPCs by trust level        | Separate firewall endpoints per subnet                |
-| Audit network attempts             | Logging to S3 + CloudWatch metrics                    |
-
----
-
-## Security Event Flow Example
-
-**Scenario:**  
-Compromised EC2 in `PrivateSubnet-A` attempts to beacon out to `beacon.l33t-c2.xyz`
-
-1. Route table forces outbound through Firewall Endpoint  
-2. Stateful rule matches DNS query → `*.l33t-c2.xyz`  
-3. Traffic is denied  
-4. Log is sent to **S3**  
-5. **CloudWatch** Metric Filter triggers alert → **SNS** → **Slack**  
-6. **GuardDuty** enriches flow data, confirms persistence  
-7. **Lambda** remediates EC2 via tag + quarantine SG  
-
-**Result:**  
-SnowySec shuts down the C2 channel in under 30 seconds with a full audit trail.
-
----
-
-## Integration with Other Services
-
-| Service           | Integration Benefit                                              |
-|------------------|------------------------------------------------------------------|
-| **CloudWatch Logs** | Real-time alerting on blocked/allowed flows                  |
-| **S3**              | Long-term archive of traffic metadata                        |
-| **Kinesis**         | Live log streaming into SIEMs or Lambda pipelines            |
-| **Security Hub**    | Normalize and triage findings                                |
-| **GuardDuty**       | Layered detection via flow + DNS + Firewall + threat intel  |
-| **AWS Organizations** | Centralized firewall deployments in hub-and-spoke VPCs     |
-
----
-
-## Pricing Overview (2025 Estimates)
-
-| Item                     | Cost Estimate                                         |
-|--------------------------|------------------------------------------------------|
-| **Firewall Endpoint Hourly** | ~$0.395/hr per AZ                              |
-| **Data Processed**           | ~$0.065 per GB processed                        |
-| **Logging to S3/CloudWatch**| Billed by destination service                    |
-| **Rule Evaluation**         | Included in endpoint hourly cost                |
-
-> **Note:** Heavy traffic + deep inspection = higher data costs. But worth it in regulated or high-risk environments.
-
----
-
-## Final Thoughts
-
-Most teams stop at **Security Groups** and **NACLs**, but that’s like locking your front door while leaving the windows open.
-
-**AWS Network Firewall** is what transforms your cloud into a **defensible castle**:
-
-- Monitors all traffic  
-- Inspects payloads  
-- Responds in real-time  
-- Logs everything  
-- Blocks exfiltration  
-- Detects malware patterns  
-
-And you don’t have to manage infrastructure.
-
-> Security at scale isn’t just IAM and encryption.  
-> It’s **visibility + enforcement at the network layer**.
-
-If SnowySec’s workloads ever get hit, this firewall won’t just block the threat — it’ll **record it, alert it, route it**, and let the rest of the pipeline **contain and respond**.
-
-**Build with defense in depth.**  
-Let this be your **cloud perimeter**.
-
+- Inspects only routed traffic. Misconfigured route tables silently bypass it, and asymmetric routing breaks stateful inspection.
+- Stateful engine defaults to allow, so an unconfigured policy provides little protection; it is not deny-by-default like a security group.
+- Stateless rules take precedence over stateful and can cause asymmetric-flow issues, which is why AWS recommends minimizing them and forwarding to the stateful engine.
+- TLS inspection is required to see inside HTTPS but adds 5-20 ms latency and certificate/Private CA cost, so it is applied selectively to high-risk egress, not everywhere.
+- It is not a DDoS mitigation and not a replacement for WAF on inbound web traffic; it complements Shield and WAF rather than replacing them.
+- Cost scales with endpoint-hours per AZ plus data processed per GB, so high-volume deep inspection is expensive; reserve DPI for traffic that genuinely needs it.
