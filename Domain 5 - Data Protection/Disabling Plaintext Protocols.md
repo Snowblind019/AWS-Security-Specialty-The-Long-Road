@@ -1,186 +1,40 @@
 # Disabling Plaintext Protocols (FTP, Telnet, HTTP)
 
-## What Are Plaintext Protocols
+Plaintext protocols move credentials and data over the wire with no encryption, so anyone in the traffic path can read, alter, or replay them. FTP (21), Telnet (23), unencrypted HTTP (80), and bare SMTP (25) are the usual offenders, and each has an encrypted replacement (SFTP/FTPS, SSH or Session Manager, HTTPS with TLS 1.2+, SMTP with STARTTLS). In AWS the work is partly network-level (deny the ports at security groups and NACLs) and partly policy-level (force encrypted transport where a port block does not reach, above all S3). The thing to hold onto: blocking the port stops the protocol at the network edge, but for managed services like S3 the real enforcement is a bucket policy denying requests where `aws:SecureTransport` is false, and redirect-to-HTTPS at the ALB or CloudFront closes the client-side gap.
 
-Plaintext protocols are network protocols that transmit data without encryption, making them:
+## How it works
 
-- Readable by anyone in the traffic path (ISPs, proxies, compromised routers)  
-- Vulnerable to man-in-the-middle (MITM) attacks  
-- Non-compliant with modern standards  
+- **Deny the ports at security groups and NACLs.** Security groups (stateful, per-ENI) deny inbound and outbound on 21, 23, and 80 for the workloads that should never speak them, and NACLs (stateless, per-subnet) give a broader subnet-level backstop. This removes the plaintext path at the network layer.
+- **Force HTTPS on S3 with `aws:SecureTransport`.** A port block does not apply to S3, so the control is a bucket policy that denies any request where `aws:SecureTransport` is false. This is global: it applies to console, CLI, SDK, and every tool, and it is the single most tested S3 in-transit control.
+- **Redirect HTTP to HTTPS at the edge.** Set the ALB port 80 listener to redirect to 443, and set the CloudFront viewer protocol policy to HTTPS-only or redirect-HTTP-to-HTTPS, so a client cannot complete a plaintext connection even if it tries.
+- **Replace Telnet and prefer keyless shell.** Block port 23 and, where possible, avoid inbound SSH (22) entirely by using SSM Session Manager, which gives IAM-gated, logged, zero-inbound shell access with CloudTrail session records.
+- **Root out FTP.** Port 21 open on an EC2 instance means legacy `vsftpd`/`proftpd`. Remove the package and migrate transfers to SFTP/SCP (SSH-based) or HTTPS with signed URLs.
+- **Detect and alarm on legacy ports.** VPC Flow Logs surface connections on 21, 23, and 80 for CloudWatch alarms, and GuardDuty flags unusual ports and traffic to known-bad hosts. This catches drift and backdoors after the initial cleanup.
 
-**Common offenders:**
+## Enforcement by surface
 
-| **Protocol** | **Port** | **Danger**                       | **Secure Alternative**  |
-|--------------|----------|----------------------------------|--------------------------|
-| FTP          | 21       | Sends creds + data in plaintext  | SFTP, FTPS               |
-| Telnet       | 23       | Remote shell with no encryption  | SSH                      |
-| HTTP         | 80       | Plaintext web/API traffic        | HTTPS (TLS 1.2+)         |
-| SMTP (unsecured) | 25   | Plaintext email transport        | SMTP with STARTTLS       |
+| Surface | Plaintext risk | Enforcement |
+|---|---|---|
+| **EC2 admin access** | Telnet (23) | Block 23, use SSH or SSM Session Manager |
+| **EC2 file transfer** | FTP (21) | Remove FTP daemon, use SFTP/SCP/HTTPS |
+| **Web / API front door** | HTTP (80) | ALB or CloudFront redirect to HTTPS |
+| **S3 access** | `http://` requests | Bucket policy deny on `aws:SecureTransport=false` |
+| **Email transport** | Bare SMTP (25) | Enforce STARTTLS |
+| **Detection** | Any legacy port | VPC Flow Logs alarms plus GuardDuty |
 
----
+## What gets tested
 
-## Cybersecurity Analogy
+- **S3 in-transit enforcement is `aws:SecureTransport`.** The correct answer for "require encryption in transit to a bucket" is a bucket policy denying requests where `aws:SecureTransport` is false, not a security group (which does not apply to S3) and not just enabling TLS on clients.
+- **Port block vs policy.** Network-reachable services (EC2 protocols) are handled by security groups and NACLs. Managed services (S3) need policy conditions. Mixing these up is a common distractor.
+- **Redirect vs deny at the edge.** ALB listener redirect and CloudFront HTTPS-only/redirect are how you stop clients connecting over HTTP to your front door. Deny is for ports you never want, redirect is for the web path you want upgraded.
+- **Session Manager over Telnet/SSH.** When the goal is removing inbound plaintext admin access and getting logged, IAM-gated access, Session Manager beats both Telnet and open SSH.
+- **STARTTLS for SMTP.** Securing email transport is STARTTLS on 25 (or submission over 587/465), not simply blocking mail.
 
-Using plaintext protocols is like sending confidential letters written on **postcards**.  
-Anyone in the post office — or along the route — can:
+## Limitations
 
-- Read your message  
-- Modify it  
-- Forward it to someone else  
-
-**Encryption (TLS/SSH) turns that postcard into a tamper-proof, sealed envelope.**
-
-## Real-World Analogy
-
-Let’s say your company warehouse logs employee check-ins using **walkie-talkies (plaintext)**.
-
-- Anyone nearby can listen in  
-- Someone can impersonate an employee  
-- There’s no record of what was said  
-
-Switching to secure, encrypted comms (SSH/SFTP/HTTPS) is like moving to **encrypted headsets with identity authentication**.
-
----
-
-## Where These Protocols Might Appear in AWS
-
-| **Use Case / Location**          | **Risk Protocol** | **Secure Alternative**           |
-|----------------------------------|-------------------|----------------------------------|
-| Admin access to EC2              | Telnet            | SSH / SSM Session Manager        |
-| Web server default config        | HTTP              | HTTPS (TLS 1.2+)                 |
-| File uploads/downloads to EC2    | FTP               | SFTP / HTTPS / SCP               |
-| Third-party integrations         | HTTP endpoints    | HTTPS APIs                       |
-| User uploads to S3 via script    | HTTP PUT          | HTTPS + Signed URL               |
-| Custom-built internal tools      | HTTP/Telnet       | HTTPS + mTLS / SSH               |
-
----
-
-## How to Disable Plaintext Protocols in AWS (Step by Step)
-
-### 1. Block Known Ports in Security Groups & NACLs
-
-| **Protocol** | **Port** | **Action**              |
-|--------------|----------|--------------------------|
-| FTP          | 21       | ❌ Deny Inbound + Outbound |
-| Telnet       | 23       | ❌ Deny All               |
-| HTTP         | 80       | ❌ Deny or redirect via ALB |
-| SMTP         | 25       | ❌ Block or force STARTTLS  |
-
-- Use **Security Groups** to deny inbound and outbound traffic on these ports  
-- Use **Network ACLs** for broader enforcement at the subnet level  
-
-### 2. Use S3 Bucket Policies to Deny Non-HTTPS Access
-
-```json
-"Condition": {
-  "Bool": {
-    "aws:SecureTransport": "false"
-  }
-}
-```
-
-- Blocks HTTP API calls to S3  
-- Works globally — CLI, SDK, tools, users
-
-### 3. Disable HTTP on ALBs / CloudFront
-
-- Set **ALB Listener on port 80** to redirect to HTTPS  
-- Set **CloudFront Viewer Protocol Policy** to:  
-  - HTTPS Only  
-  - or Redirect HTTP to HTTPS  
-
-- Prevents clients from ever connecting over plaintext
-
-### 4. Use SSM Instead of Telnet/SSH Where Possible
-
-- Block **port 23 (Telnet)** and **port 22 (SSH)**  
-- Use **SSM Session Manager**  
-- Enforce:  
-  - IAM-based access  
-  - Command logging  
-  - CloudTrail session logs  
-
-### 5. Detect and Replace FTP
-
-- If you see **port 21** open on any EC2:  
-  - Replace with **SFTP (SSH-based)** or **HTTPS-based uploads**  
-  - Remove old **`vsftpd`** or **`proftpd`** packages  
-
-### 6. Use IAM Policies to Enforce Secure API Use
-
-You can conditionally deny actions unless certain secure headers/protocols are used:
-
-```json
-"Condition": {
-  "BoolIfExists": {
-    "aws:ViaAWSService": "false"
-  }
-}
-```
-
-### 7. Monitor with VPC Flow Logs + GuardDuty
-
-- Use **VPC Flow Logs** to detect connections on ports **21**, **23**, **80**  
-- Use **GuardDuty** to catch:  
-  - Unusual ports  
-  - Communications with known malware hosts over plaintext  
-  - Unencrypted credentials (via packet inspection in some cases)  
-
----
-
-## Best Practices Summary
-
-| **Action**                      | **Why It Matters**                               |
-|----------------------------------|---------------------------------------------------|
-| Block FTP, Telnet, HTTP ports    | Prevents entry points for sniffing & replay      |
-| Redirect HTTP to HTTPS           | Helps users/devs follow secure defaults          |
-| Use `aws:SecureTransport` in S3  | Forces clients to encrypt data in transit        |
-| Use SFTP/SCP for file transfer   | Secure file transport without exposing FTP       |
-| Use IAM + TLS for API calls      | Ensures identity + encryption                    |
-| Log and alert on legacy ports    | Detect any backdoors, misconfigs, or drift       |
-| Document & audit protocol usage  | Helps during compliance (PCI, HIPAA, etc.)       |
-
----
-
-## Real-Life Example (Snowy’s Secure VPC Cleanup)
-
-Snowy inherits an old VPC with:
-
-- EC2s running FTP + Telnet for remote support  
-- A custom PHP app exposed on **port 80 only**  
-- S3 buckets that allowed `http://` requests from scripts  
-
-### Actions Taken:
-
-- **FTP/Telnet packages removed**  
-- **Ports 21 and 23 blocked** in security groups  
-- **HTTP → HTTPS redirects** enabled in ALB  
-- **S3 buckets enforced `aws:SecureTransport`**  
-- **CloudWatch alarms** set on ports 21, 23, 80 via VPC Flow Logs  
-- **All file uploads migrated** to signed S3 HTTPS PUTs  
-- **Partner integrations updated** to use HTTPS only  
-
-### Result:
-
-✔️ Zero plaintext protocols remain  
-✔️ All data-in-transit is encrypted  
-✔️ Satisfies compliance checks  
-✔️ Attack surface reduced significantly
-
----
-
-## Final Thoughts
-
-Plaintext protocols like **FTP**, **Telnet**, and **HTTP** are dinosaurs in the cloud — and they bring serious security baggage:
-
-- No encryption  
-- No authentication integrity  
-- No audit trail  
-- Total exposure  
-
-In AWS, you have **full control** over which ports, protocols, and headers get in — so use that power:
-
-- Block the bad  
-- Enforce the encrypted  
-- Monitor for violations  
-- Stay compliant and cloud-native
+- Security groups and NACLs cannot enforce transport encryption on S3 or other managed API endpoints. Those require policy conditions like `aws:SecureTransport`.
+- A `aws:SecureTransport` deny protects transport only. It does not encrypt the object at rest, and it does not stop a TLS-using but otherwise unauthorized caller, so it layers with SSE and IAM, it does not replace them.
+- Redirecting HTTP to HTTPS still exposes the initial plaintext request line before the upgrade, so for the strictest cases HTTPS-only (reject, not redirect) is preferable to redirect.
+- Blocking ports does not remove installed plaintext daemons. A reopened port or a rule change re-exposes them, so removing the FTP/Telnet software is the durable fix.
+- STARTTLS is opportunistic and can be stripped by an active MITM unless enforced, so for regulated mail flows you want enforced TLS, not just STARTTLS availability.
+- Detection via Flow Logs and GuardDuty is after the fact. It catches drift but does not by itself prevent a plaintext connection, so it complements the preventive controls rather than replacing them.

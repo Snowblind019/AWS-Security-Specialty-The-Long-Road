@@ -1,135 +1,40 @@
-# Amazon S3 via VPC Endpoint
+# Amazon S3 via VPC Gateway Endpoint
 
-## What Is the Service
+An S3 gateway VPC endpoint routes S3 traffic from your VPC over the AWS private network via a route-table entry, so private-subnet workloads reach S3 without a NAT gateway or internet gateway. It is free (no hourly or per-request charge), which makes it both a cost win over NAT and a security win: paired with an `aws:SourceVpce` bucket policy condition, it becomes a data-perimeter control that guarantees a bucket is only reachable through your endpoint, which blocks exfiltration to arbitrary buckets or from the internet. Gateway endpoints exist only for S3 and DynamoDB. The thing to hold onto: the gateway endpoint gives private routing plus the `aws:SourceVpce` perimeter and eliminates NAT cost, but it does not encrypt traffic (TLS still comes from S3/HTTPS and is enforced separately with `aws:SecureTransport`), and it cannot span Regions.
 
-Amazon S3 via VPC Gateway Endpoints lets you connect to S3 entirely through AWS's private network, without ever touching the public internet. This is critical when you want to:
+## How it works
 
-• Eliminate exposure to the internet
-• Avoid NAT Gateway usage and its high per-GB costs
-• Enforce tight security boundaries using IAM and S3 bucket policies
-• Stay compliant with frameworks like NIST, PCI-DSS, FedRAMP
+- **It is a gateway endpoint, added to route tables.** You create the S3 endpoint and attach it to the relevant route tables, which adds a route for the S3 prefix list to the endpoint target. S3-bound traffic then stays on the AWS backbone. Gateway endpoints are S3/DynamoDB only, distinct from interface (PrivateLink) endpoints.
+- **DNS is unchanged.** The S3 endpoint name resolves as normal and AWS reroutes it internally, so no application code changes are needed.
+- **`aws:SourceVpce` builds a data perimeter.** A bucket policy that denies requests whose `aws:SourceVpce` does not match your endpoint ensures the bucket is only reachable through that endpoint, not from the internet and not from other networks or accounts. This is the exfiltration-prevention control.
+- **It removes NAT cost and exposure.** Without the endpoint, a private-subnet instance reaches S3 via NAT, paying per-GB processing and data transfer plus the NAT hourly charge, and exposing an egress path. The gateway endpoint is free and keeps traffic internal.
+- **Visibility layers on top.** VPC Flow Logs show subnet-to-S3 traffic, CloudTrail data events log object-level access, and Config can detect when a bucket loses its endpoint restriction.
+- **It does not encrypt.** The endpoint controls routing and the perimeter, not encryption. TLS comes from S3's HTTPS endpoints and the SDK default, and enforcing it still requires an `aws:SecureTransport` deny.
 
-Without a VPC endpoint, EC2 instances or Lambda functions in private subnets would need to use a NAT Gateway or Internet Gateway to access S3. That’s unnecessary risk and unnecessary cost. With a Gateway VPC Endpoint, you bypass all that and stay fully within AWS's internal routing fabric.
-This is a foundational building block for Zero Trust architectures in AWS.
+## Gateway endpoint: what it provides
 
----
+| Capability | Provided by the endpoint | The actual mechanism |
+|---|---|---|
+| **Private routing (no NAT/IGW)** | Yes | Route table entry, free |
+| **Data perimeter** | Via policy | `aws:SourceVpce` deny in bucket policy |
+| **Encryption in transit** | No | `aws:SecureTransport` + S3 HTTPS |
+| **Cost savings** | Yes | Eliminates NAT per-GB and hourly charges |
+| **Cross-Region** | No | Endpoint, VPC, and bucket must share a Region |
 
-## Cybersecurity Analogy
+## What gets tested
 
-Imagine you’re building a secure archive room inside your company. You need to send employees there to drop off sensitive documents. You have two options:
+- **`aws:SourceVpce` for the data perimeter.** Restricting a bucket so it is only reachable through your VPC endpoint (blocking internet and cross-account access, and preventing exfiltration) is the `aws:SourceVpce` condition, preferred over fragile source-IP approaches.
+- **Gateway endpoint eliminates NAT for S3.** Reaching S3 privately from a private subnet without NAT cost is the free S3 gateway endpoint. This is both the cost and the security answer.
+- **The endpoint does not enforce TLS.** Encryption in transit is a separate `aws:SecureTransport` control. Do not answer "the VPC endpoint encrypts the traffic."
+- **Gateway vs interface endpoint.** S3 uses a free gateway endpoint from within a VPC. Interface (PrivateLink) endpoints for S3 exist for on-prem or cross-VPC access and are billed. DynamoDB also uses a gateway endpoint.
+- **Same-Region constraint.** The endpoint, VPC, and bucket must be in the same Region, so cross-Region access needs a different approach.
+- **Exfiltration containment.** If malware on an instance should not be able to send data to an attacker-controlled bucket, `aws:SourceVpce` plus endpoint policies scoping reachable buckets is the containment control.
 
-• Let them go outside the building, walk through a public alley, and re-enter through the archive’s public door
-• Or… build a secure, monitored internal corridor directly between your operations floor and the archive room
+## Limitations
 
-The VPC Endpoint is that private corridor. It’s shielded from the outside world. You can install surveillance (logs), badge access (IAM), and even door scanners (bucket policies) to control who gets through. No outside risk, no extra exposure.
-
-## Real-World Analogy
-
-You’ve got a warehouse, and forklifts need to send boxes to storage. Without an internal access road, they’d have to go out to the main highway and loop around — burning fuel, facing traffic, and possibly being hijacked.
-So you build an internal access tunnel. No toll booths. No highway. No attackers. Just your forklifts, your road, your destination.
-That’s the difference between using a NAT Gateway and using a Gateway VPC Endpoint to access S3.
-
----
-
-## How It Works
-### Service Type
-
-S3 Gateway Endpoints are Gateway-type VPC Endpoints — not the Interface type with ENIs. These are only available for S3 and DynamoDB.
-
-### Routing
-
-You create a VPC endpoint for S3 in a region and attach it to one or more route tables.
-AWS adds a route:
-**Destination:** `pl-68a54001` → **Target:** `com.amazonaws.region.s3`
-All traffic destined for `s3.amazonaws.com` (and other S3 regional endpoints) will now be rerouted internally.
-
-### IAM + Bucket Policy Enforcement
-
-You can restrict access to an S3 bucket using `aws:SourceVpce`. Example:
-
-```json
-{
-  "Effect": "Deny",
-  "Principal": "*",
-  "Action": "*",
-  "Resource": "*",
-  "Condition": {
-    "StringNotEquals": {
-      "aws:SourceVpce": "vpce-1234567890abcdef0"
-    }
-  }
-}
-```
-
-This guarantees the request must come through the VPC endpoint — not from the internet, not from another account.
-
-### DNS Behavior
-
-The DNS name `s3.amazonaws.com` doesn’t change. AWS intercepts it and reroutes internally. No code changes needed.
-
-### Visibility and Logging
-
-You can:
-• Use VPC Flow Logs to monitor traffic from subnets to S3
-• Use CloudTrail Data Events to log object-level access
-• Use AWS Config to detect when buckets lose endpoint restrictions
-
----
-
-## Pricing Models
-
-- No hourly charge for Gateway Endpoints.
-- No per-request fees either.
-- You only pay the normal S3 costs — PUT, GET, data stored, etc.
-
-If you skip VPC Endpoints and use a NAT Gateway:
-- You’ll pay $0.045 per GB for data transfer
-- Plus $0.045 per GB for NAT processing
-- Plus $0.045/hr for the NAT Gateway itself
-
-It adds up. Especially for apps doing logging, backup, or large object ingestion to S3.
-
----
-
-## Other Technical Considerations
-
-- Can attach to multiple route tables
-- Cannot span Regions — VPC endpoint must be in the same Region as the VPC and S3 bucket
-- Works with S3 Access Points, S3 Object Lambda, and cross-account buckets
-- Does not support prefix lists for routing (you use the S3 prefix list ID when configuring the route)
-
----
-
-## Real-Life Example: Snowy’s Backup Pipeline
-
-Let’s say you’re running an EC2 instance inside a private subnet. It runs hourly backups of sensitive logs to S3 (`s3://snowy-logs-prod`).
-Before VPC endpoints, that EC2 had to go out through a NAT Gateway. That meant:
-
-- Exposure to the public internet
-- VPC Flow Logs couldn’t see the full egress path
-- And you were burning $0.09/GB (combined with NAT charges)
-
-Now you build a Gateway VPC Endpoint for S3, attach it to the private route table, and update the bucket policy to only accept requests from `aws:SourceVpce`.
-
-**Result:**
-- No internet exposure
-- No NAT Gateway charges
-- Full visibility into source IPs, IAM roles, and request metadata
-- Zero Trust enforced at the network boundary, identity layer, and storage policy
-
-If malware gets onto that EC2 instance, it can’t exfiltrate to another bucket. It’s locked down.
-
----
-
-## Final Thoughts
-
-VPC Gateway Endpoints for S3 are one of the highest ROI security tools in all of AWS. They’re simple, powerful, and free.
-
-In any serious architecture where EC2, Lambda, or Fargate functions operate in private subnets and need access to S3:
-
-- Use them to block unnecessary internet exposure
-- Enforce `aws:SourceVpce` in every bucket policy
-- Pair them with CloudTrail, Config, and Flow Logs for end-to-end visibility
-- Remove your NAT Gateways if their only job was to reach S3
-
-This is one of those rare services that hits **security**, **cost**, **visibility**, and **performance** all at once — and does it with almost no complexity.
+- The gateway endpoint provides no encryption, so relying on it for encryption in transit is wrong. TLS must be enforced with a policy condition.
+- It only covers S3 and DynamoDB and only works from within the VPC via route tables, so on-prem or cross-VPC private S3 access needs an interface endpoint.
+- It cannot span Regions, so the endpoint, VPC, and bucket must share a Region.
+- The `aws:SourceVpce` perimeter is only as good as its coverage. A bucket without the condition, or a workload with an alternate egress path (public subnet with IGW), can bypass the intended perimeter.
+- The endpoint scopes network access but does not replace IAM and bucket policies, so authorization still depends on those being correct.
+- Endpoint policies can restrict which buckets and actions are reachable through the endpoint, but a permissive endpoint policy weakens the containment, so it must be scoped deliberately.

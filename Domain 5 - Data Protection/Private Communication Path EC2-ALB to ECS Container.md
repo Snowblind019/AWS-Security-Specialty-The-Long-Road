@@ -1,118 +1,38 @@
-# Private Communication Path: EC2 / ALB → ECS Container
+# Private Communication Path: ALB to ECS Container
 
-## What Is This Flow
+This is the common pattern where an Application Load Balancer receives traffic and forwards it to an ECS container (a public site, private API, or internal microservice). The security point that trips people up is that encryption on the back hop, ALB to container, is optional and independent of the front hop. An HTTPS listener secures client-to-ALB, but by default the ALB terminates TLS and forwards plain HTTP to the target unless you also set the target group to HTTPS and run TLS in the container. So "the outside is HTTPS" does not mean the traffic inside the VPC is encrypted. The thing to hold onto: end-to-end encryption requires three things together (HTTPS listener, HTTPS target group protocol, and TLS terminating in the container), it is opt-in and not enforced by AWS, and the default HTTPS-at-the-edge, HTTP-inside setup leaves a plaintext segment between the ALB and ECS.
 
-In this pattern, an EC2-hosted **Application Load Balancer (ALB)** receives incoming traffic and forwards it to an **ECS container**, often part of an internal microservice architecture.
+## How it works
 
-This flow is everywhere: public websites, private APIs, internal dashboards, or backend services talking across a mesh of load balancers.
+- **The listener secures the front hop.** An HTTPS listener on the ALB establishes TLS from the client to the ALB and, by default, terminates it there, meaning the ALB decrypts and forwards. An HTTP listener means the front hop itself is plaintext.
+- **The target group protocol decides the back hop.** A target group set to HTTP sends plaintext from ALB to the container even when the listener was HTTPS. A target group set to HTTPS re-encrypts ALB-to-container, which is what you need for end-to-end.
+- **The container must actually terminate TLS.** For an HTTPS target group to work, the ECS container has to listen on TLS with a cert. If the app only speaks HTTP, setting the target group to HTTPS fails the health checks.
+- **ALB always terminates, it does not pass through.** The ALB is a Layer 7 load balancer that decrypts to inspect and route, so true TLS passthrough (client cert reaching the container untouched) is not an ALB feature. Passthrough requires an NLB (Layer 4) or a TCP/TLS design, which is the pattern when the container must see the original TLS session.
+- **End-to-end needs all three pieces.** HTTPS listener plus HTTPS target group plus TLS in the container gives client-to-ALB and ALB-to-container both encrypted. Miss any one and there is a plaintext hop.
+- **Observability sits alongside.** ELB access logs and VPC Flow Logs give you visibility into the traffic, which matters because a misconfigured back hop is otherwise invisible.
 
-But here’s the catch: **encryption between ALB and ECS is optional** — it depends entirely on your listener config and target group protocol.
+## ALB-to-ECS encryption combinations
 
-- If your ALB uses an **HTTPS listener**, it can:
-  - Terminate TLS (decrypt at the ALB level)
-  - Or pass through TLS all the way to the container (via TCP mode)
-- If your ALB uses **HTTP**, the downstream ECS connection is **not encrypted**, even if the ECS service is private.
+| Listener | Target group | Result |
+|---|---|---|
+| **HTTP** | HTTP | No encryption anywhere |
+| **HTTPS** | HTTP | Client-to-ALB encrypted, ALB-to-ECS plaintext (default) |
+| **HTTPS** | HTTPS | Encrypted both hops (needs TLS in the container) |
+| **NLB / TCP passthrough** | Container terminates | End-to-end, container sees original TLS (mTLS possible) |
 
-> **Encryption-in-transit here is not guaranteed. It must be explicitly configured.**
+## What gets tested
 
----
+- **HTTPS listener alone is not end-to-end.** The default terminates TLS at the ALB and forwards HTTP. If a scenario requires encryption all the way to the container, the answer sets the target group protocol to HTTPS and runs TLS in the container, not just an HTTPS listener.
+- **ALB terminates, NLB passes through.** When the requirement is that the container must see the original TLS session or perform client-cert (mTLS) validation itself, that is an NLB with TLS passthrough (or a TCP design), because an ALB always decrypts.
+- **Target group protocol is the back-hop control.** The exam tests whether you know the listener and the target group protocol are independent, and that the target group is what encrypts ALB-to-target.
+- **Internal does not mean encrypted.** A private ECS service reachable only inside the VPC still receives plaintext over the back hop unless HTTPS is configured. Network privacy is not encryption.
+- **Compliance end-to-end.** PCI/HIPAA scenarios that demand encryption in transit throughout require the full three-piece setup, not edge-only TLS.
 
-## Cybersecurity Analogy
+## Limitations
 
-Think of ALB as a **receptionist** at a secure office.
-
-If the client shows up and asks to speak in code (TLS), the receptionist can either:
-
-- Decode the message and forward the plain version to an employee (TLS termination), or  
-- Leave it encrypted and pass the sealed envelope directly to the employee (TLS passthrough)
-
-Now imagine some offices say:
-
-> “We don’t do secure messages here. Just talk freely in the lobby.”
-
-That’s what happens if you use **HTTP listeners** and **HTTP target groups** — your private messages are being whispered across an open room.
-
-## Real-World Analogy
-
-Let’s say you run a coffee shop. Customers place orders at a **kiosk (ALB)**, and those orders are routed to the **barista (ECS container)**.
-
-- If the kiosk accepts secure online payments, it **decrypts** the payment, logs it, then sends a **plaintext** work order to the barista.
-- Alternatively, in a more secure setup, the kiosk **doesn’t decrypt anything** — it just hands off the **encrypted payload** to the barista, who has their own decryption keys.
-
-Same with **ALB → ECS**.  
-If you don’t **explicitly secure both ends**, traffic can float around in plaintext.
-
----
-
-## How It Works
-
-| Component        | Behavior                                                                 |
-|------------------|---------------------------------------------------------------------------|
-| **ALB Listener** | HTTPS listener uses TLS termination unless configured for passthrough     |
-| **Target Group** | Can use HTTP or HTTPS to send traffic to ECS containers                   |
-| **ECS Container**| Must expose ports and listen on expected protocol                         |
-| **TLS Passthrough** | Possible using ALB + NLB combo or special config (rare)                |
-
-> By default, HTTPS listeners **terminate TLS** at the ALB — meaning the ALB decrypts traffic and forwards plain HTTP to ECS.
-
-This is **okay for public endpoints**, but not ideal for internal services that require strict end-to-end (E2E) encryption.
-
-To go full **E2E TLS**, you need:
-
-- HTTPS listener on ALB  
-- TLS listener in the ECS container  
-- Target group protocol = HTTPS  
-
-But **this is not enforced by AWS** — **you** must configure it.
-
----
-
-## Encrypted In Transit: Conditional
-
-**Encrypted if**:
-
-- ALB uses an **HTTPS listener**, **and**
-- Target group is set to **HTTPS** or uses **passthrough**
-
-**Not encrypted if**:
-
-## Security Config Options
-
-| Option                         | Effect                                                    |
-|--------------------------------|------------------------------------------------------------|
-| HTTP Listener → HTTP Targets   | ✖️ No encryption at all                                   |
-| HTTPS Listener → HTTP Targets  | TLS terminates at ALB (internal traffic = plaintext)      |
-
-| HTTPS Listener → HTTPS Targets | TLS from client to ALB, then again from ALB to ECS        |
-| TLS Passthrough (rare)         | Possible with NLB → ALB chaining or TCP mode (strict E2E) |
-
-> In many orgs, the default is HTTPS at the edge and **HTTP inside** — which **works**, but **isn't truly encrypted throughout**.
-
----
-
-
-## Security Considerations
-
-| Risk                        | Mitigation                                                  |
-|-----------------------------|--------------------------------------------------------------|
-
-| Plaintext to ECS            | Use HTTPS target groups or implement TLS at the app level    |
-| Implicit Trust in ALB       | If ALB is compromised, downstream traffic is exposed         |
-| Misconfig of TLS passthrough| Validate certs in containers, use mutual TLS if needed       |
-| Lack of Auditing            | Enable ELB access logs + VPC Flow Logs for observability     |
-
----
-
-## Final Thoughts
-
-This flow — **ALB to ECS container** — is deceptively simple, but **dangerously easy to misconfigure**.
-
-AWS gives you all the tools for TLS enforcement, but it’s **opt-in**.  
-**You** decide whether encryption continues beyond the load balancer or stops there.
-
-If you're building **internal microservices** or anything sensitive (auth APIs, admin panels, backend workers), make it a rule:
-
-> **“If the outside is encrypted, the inside should be too.”**
-
-TLS from **ALB → ECS** isn’t overkill — it’s **minimum viable trust**.
-
+- The ALB cannot do TLS passthrough. It always terminates at Layer 7, so client-cert-to-container or seeing the raw TLS session needs an NLB or TCP-mode design.
+- End-to-end encryption is entirely opt-in and requires coordinated config across the listener, target group, and the container app, so any single default left in place leaves a plaintext hop.
+- An HTTPS target group requires the container to terminate TLS with a valid cert, adding cert management inside the container that many teams skip, defaulting back to HTTP internally.
+- Terminating at the ALB means the ALB sees plaintext, so a compromised ALB exposes the traffic. End-to-end TLS or mTLS reduces that implicit trust.
+- Network-level privacy (private subnets, security groups) is not a substitute for encryption in transit, so relying on "it is internal" leaves the back hop unprotected against in-VPC sniffing.
+- Misconfigured back-hop encryption is easy to miss without ELB access logs and Flow Logs, so observability is required to catch a silently plaintext internal segment.

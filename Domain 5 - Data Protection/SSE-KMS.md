@@ -1,253 +1,43 @@
-# SSE-KMS
-
-## What Is SSE-KMS
-
-SSE-KMS is Server-Side Encryption with AWS Key Management Service (KMS) keys for Amazon S3 objects. Compared to SSE-S3, which hides the encryption process and keys from you, SSE-KMS opens the door to cryptographic control — logging, IAM enforcement, and contextual conditions.
-
-The flow is simple:
-
-- You upload a file to S3
-- AWS encrypts it at rest using a data key
-- That data key is generated and encrypted by AWS KMS, using either:
-  - An AWS-managed CMK (e.g., `aws/s3`)
-  - A Customer-managed CMK (SSE-KMS-CMK) that you create, tag, monitor, and restrict
-
-But here’s where things start to get interesting:
-
-- Access to the object now depends on two things:
-  - S3 permissions (`s3:GetObject`, etc.)
-  - KMS permissions (`kms:Decrypt`, etc.)
-
-This two-layer model is what allows fine-grained control, data egress protection, cross-account key ownership, and CloudTrail-based alerting on sensitive access.
-
----
-
-## Cybersecurity Analogy
-
-If SSE-S3 is like storing your files in a locker with TSA’s keys, SSE-KMS is like having your own biometric vault inside the airport.
-
-- S3 holds the data
-- But KMS controls whether the vault will even hand over the key
-- Even if someone gets access to the file, they can’t decrypt it unless KMS allows it
-
-This separation is crucial in zero-trust, multi-account, and sensitive data architectures.
-
-## Real-World Analogy
-
-Imagine Snowy stores invoices in a locked room (S3). But instead of a generic key, access requires:
-
-- A badge (IAM permission)
-- A fingerprint scan (KMS decrypt permission)
-- A security camera (CloudTrail)
-
-With SSE-KMS:
-
-- You define the encryption key
-- You get to see who used it
-- You can revoke access even if the object is still readable in theory
-
----
-
-## How SSE-KMS Works in S3 Encryption
-
-1. You upload an object with SSE-KMS enabled (header or bucket default)
-2. AWS S3 sends a `GenerateDataKey` request to KMS
-3. KMS returns:
-  - The plaintext data key (used to encrypt the object)
-  - The encrypted data key (wrapped by your CMK)
-4. S3 stores:
-  - The encrypted object
-  - The wrapped data key
-5. On read, S3 sends the encrypted key to KMS for `Decrypt`, gets the plaintext key, and decrypts the object
-
-You never see the data key. But you control the CMK that governs it.
-
----
-
-## Headers and Defaults
-
-**Upload Header for SSE-KMS:**
-
-```http
-x-amz-server-side-encryption: aws:kms
-x-amz-server-side-encryption-aws-kms-key-id: arn:aws:kms:region:acct:key/your-key-id
-```
-
-Or just let the **default bucket encryption** do the job.
-
----
-
-## Types of Keys
-
-| Key Type             | Description                                                                 |
-|----------------------|-----------------------------------------------------------------------------|
-| `aws/s3` (AWS-managed) | Default KMS key used automatically. No cost. You don’t manage it.          |
-| Customer-managed CMK | Full control: key rotation, tagging, aliases, grants, deletion, policy      |
-
-Use customer CMKs when you want:
-
-- Auditable access via CloudTrail
-- Key deletion or rotation
-- Tag-based or condition-based access enforcement
-
----
-
-## IAM Permissions
-
-With SSE-KMS, users need both **S3 and KMS permissions**.
-Otherwise, you get **silent failures or AccessDenied** errors.
-
-**Example: Upload with SSE-KMS**
-Requires:
-
-- `s3:PutObject`
-- `kms:GenerateDataKey`
-
-**Example: Download**
-Requires:
-
-- `s3:GetObject`
-- `kms:Decrypt`
-
-Even if the user has full S3 access, they will fail if the **KMS policy denies them access to the CMK**.
-
----
-
-## CloudTrail Logging
-
-Every KMS API call is logged in CloudTrail:
-
-- `GenerateDataKey` (on PUT)
-- `Decrypt` (on GET)
-- `Encrypt`, `ReEncrypt`, `CreateKey`, etc.
-
-This enables:
-
-- **Forensics**: See who decrypted which object and when
-- **SIEM correlation**: Tie object access to user behavior
-- **Detection engineering**: Alert if `Decrypt` happens in a sensitive region or from an unusual principal
-
-SSE-KMS makes object-level access **auditable**.
-
----
-
-## Bucket Policy + KMS Policy Combo
-
-You can enforce encryption using both **S3 Bucket Policies** and **KMS Key Policies**.
-
-### Bucket Policy Enforcement:
-
-```json
-{
-  "Effect": "Deny",
-  "Principal": "*",
-  "Action": "s3:PutObject",
-  "Resource": "arn:aws:s3:::snowy-sensitive-data/*",
-  "Condition": {
-    "StringNotEquals": {
-      "s3:x-amz-server-side-encryption": "aws:kms"
-    }
-  }
-}
-```
-
-### KMS Key Policy Example:
-
-```json
-{
-  "Effect": "Allow",
-  "Principal": { "AWS": "arn:aws:iam::123456789012:role/SnowyApp" },
-  "Action": [ "kms:Decrypt", "kms:GenerateDataKey" ],
-  "Resource": "*"
-}
-```
-
-Combine both to fully lock down who can upload/decrypt and which encryption context applies.
-
----
-
-## Ties to SCPs and Org-Wide Control
-
-SSE-KMS shines in **multi-account governance**. Examples:
-
-- SCP enforces `s3:PutObject` must include encryption with a specific CMK
-- SCP blocks use of `aws/s3` and forces `arn:aws:kms:...:key/snowy-required-key`
-- KMS key is owned in the **Security account**, but used across accounts via **grants**
-
-You can prevent entire OUs from:
-
-- Using the default AWS-managed key
-- Uploading unencrypted content
-- Decrypting objects without traceable keys
-
-This turns **S3 + KMS into a centralized encryption authority.**
-
----
-
-## Security Monitoring & Egress Control
-
-With SSE-KMS, you can:
-
-- See `kms:Decrypt` activity in CloudTrail
-- Use EventBridge rules to trigger GuardDuty custom findings
-- Monitor for suspicious `Decrypt` attempts from unexpected regions/accounts
-- Enforce encryption context (e.g., `"aws:EncryptionContext:env": "prod"`)
-
-This makes SSE-KMS ideal for:
-
-- PII, logs, financial data
-- DLP pipelines
-- Healthcare, government, and regulated workloads
-
----
-
-## Comparison Table (SSE-S3 vs SSE-KMS)
-
-| Feature                    | SSE-S3           | SSE-KMS                          |
-|----------------------------|------------------|----------------------------------|
-| Key Type                  | AWS-managed      | AWS-managed or customer CMK      |
-| CloudTrail Logs           | ❌ None          | ✔️ Yes (KMS API events)          |
-| Key Rotation              | Auto             | Auto or manual                   |
-| Fine-Grained Access Control | ❌              | ✔️ KMS IAM/Grants                |
-| Revocation Capability     | ❌               | ✔️ (via KMS policy changes)      |
-| Encryption Context Support | ❌               | ✔️                               |
-| Cost                      | Free             | $1/month per CMK + usage         |
-
----
-
-## Real-Life Snowy Scenario
-
-Snowy’s team archives customer invoices in S3.
-
-- They set default bucket encryption to SSE-KMS using a CMK
-- Only finance roles get access to `kms:Decrypt`
-- CloudTrail tracks every decrypt event
-- If any rogue principal tries `kms:Decrypt` from a foreign region, **Security Hub** gets a finding
-
-Later, they split accounts for dev/test/prod:
-
-- Same CMK used via cross-account KMS grants
-- All access remains centralized
-- All actions logged and revocable
-
-This kind of structure only works with **SSE-KMS**.
-
----
-
-## Final Thoughts
-
-**SSE-KMS is where S3 meets cryptographic intent.**
-
-- It’s not just encryption — it’s *governed encryption*
-- You get **control**, **visibility**, and **forensic trails**
-- You can **scope**, **revoke**, **monitor**, and **detect misuse**
-- It’s how you turn *data at rest* into **auditable, accountable assets**
-
----
-
-Use SSE-KMS when:
-
-- You care about data egress
-- You want encryption context or tags
-- You need to enforce key separation by tenant, region, or environment
-- You want to correlate `GetObject` to a `kms:Decrypt` in CloudTrail
+# SSE-KMS (Server-Side Encryption with KMS Keys)
+
+SSE-KMS is the S3 server-side encryption mode that uses a KMS key to protect objects, giving you the cryptographic control that SSE-S3 hides: CloudTrail logging of key use, IAM and key-policy scoping of decryption, encryption context, and revocation. The defining feature is the two-permission model: reading an SSE-KMS object needs both S3 permission (`s3:GetObject`) and KMS permission (`kms:Decrypt`) on the key, so the KMS key policy becomes a second authorization gate independent of S3. This is what enables data-egress control, cross-account key ownership, and object-level access auditing. The thing to hold onto: SSE-KMS ties every object read to a `kms:Decrypt` you can log, scope, and revoke, a customer-managed key is required for that control (the default `aws/s3` key gives less), and S3 Bucket Keys are how you keep the KMS request cost manageable at scale.
+
+## How it works
+
+- **Envelope encryption per object.** On PUT, S3 calls KMS `GenerateDataKey`, encrypts the object with the plaintext data key, and stores the object plus the wrapped data key. On GET, S3 sends the wrapped key to KMS `Decrypt` and decrypts. You never see the data key but control the CMK that wraps it.
+- **Key choice: `aws/s3` or a CMK.** The AWS-managed `aws/s3` key is automatic and free but cannot be policy-scoped, shared cross-account, or audited the same way. A customer-managed CMK gives key policy, rotation, tagging, grants, and CloudTrail visibility.
+- **Two-permission gate.** Access requires both S3 and KMS permissions. A principal with full S3 access still gets AccessDenied if the KMS key policy denies them, which is the core control SSE-KMS adds over SSE-S3.
+- **CloudTrail logs every key use.** `GenerateDataKey` on PUT and `Decrypt` on GET appear in CloudTrail, so you can tie object access to a principal, correlate in a SIEM, and alert on decrypts from unexpected regions or identities.
+- **Enforce via bucket policy and key policy.** A bucket policy can deny PUTs whose `s3:x-amz-server-side-encryption` is not `aws:kms` (or that omit a required key), and the KMS key policy scopes who can decrypt. Together they lock down both how objects are encrypted and who can read them.
+- **S3 Bucket Keys cut cost.** Enabling S3 Bucket Keys uses a short-lived bucket-level key to reduce `GenerateDataKey` calls to KMS, dramatically lowering cost and throttling on high-volume buckets.
+
+## SSE-S3 vs SSE-KMS
+
+| Feature | SSE-S3 | SSE-KMS |
+|---|---|---|
+| **Key** | AWS-managed | AWS-managed `aws/s3` or CMK |
+| **CloudTrail on key use** | No | Yes (`GenerateDataKey`, `Decrypt`) |
+| **Two-permission (S3 + KMS)** | No | Yes |
+| **Fine-grained access control** | No | Yes (IAM, key policy, grants) |
+| **Revocation** | No | Yes (change key policy) |
+| **Encryption context** | No | Yes |
+| **Cross-account key ownership** | No | Yes |
+| **Cost** | Free | CMK + KMS requests (mitigate with Bucket Keys) |
+
+## What gets tested
+
+- **The two-permission model.** Reading an SSE-KMS object needs `s3:GetObject` and `kms:Decrypt`. A user with full S3 access denied by the KMS key policy still cannot read the object. This is the most tested SSE-KMS fact and a common troubleshooting scenario (a GET fails, fix the KMS grant).
+- **CMK for audit, cross-account, and control.** CloudTrail decrypt visibility, cross-account key ownership, encryption context, and revocation require a customer-managed key. The `aws/s3` key does not provide them.
+- **Enforce SSE-KMS with a bucket policy.** Requiring objects to be encrypted with KMS (or a specific CMK) is a bucket policy denying PUTs without `s3:x-amz-server-side-encryption: aws:kms`, optionally pinning the key ID.
+- **Org-wide enforcement with SCPs.** Blocking the default key, forcing a specific CMK, or preventing unencrypted uploads across an OU uses SCPs plus bucket/key policies, turning S3+KMS into a centralized encryption authority.
+- **Egress and detection.** Tying `GetObject` to a `kms:Decrypt` event and alerting on anomalous decrypts (foreign region, unexpected principal) is a SSE-KMS capability SSE-S3 cannot provide.
+- **S3 Bucket Keys for cost.** High-volume SSE-KMS driving KMS costs is solved by enabling S3 Bucket Keys.
+
+## Limitations
+
+- The two-permission model means a missing `kms:Decrypt` grant silently blocks reads even when S3 access is correct, a frequent source of confusing AccessDenied errors.
+- The default `aws/s3` key gives none of the audit, cross-account, or scoping benefits, so realizing SSE-KMS's value requires a CMK and the management it entails.
+- SSE-KMS at high request volume incurs KMS costs and can hit throttling unless S3 Bucket Keys are enabled.
+- Encryption protects confidentiality, not authorization on its own. The KMS key policy and IAM still govern access, so misconfiguration there exposes data despite encryption.
+- Cross-account access requires a CMK and grants or key-policy statements, since the AWS-managed key cannot be shared, adding key-management overhead.
+- Revocation via key-policy change stops future decrypts but does not retroactively protect data already read, so it is a forward-looking control, not a recall.

@@ -1,210 +1,40 @@
 # Envelope Encryption
 
-## What Is Envelope Encryption
-
-Envelope Encryption is a **cryptographic design pattern** used by AWS and many modern security systems to securely encrypt large amounts of data **without directly using your main (master) key** on the data itself.
-
-Instead of encrypting sensitive files with your **CMK** (Customer Master Key), the process goes like this:
-
-1. Generate a one-time, random **Data Encryption Key (DEK)**  
-2. Use that DEK to encrypt the data  
-3. Encrypt the DEK itself using a **Key Encryption Key (KEK)** — usually your CMK in KMS  
-4. Store the ciphertext of the data + the encrypted DEK together  
-
-This results in a **layered, scalable encryption strategy** where your main key never touches the plaintext data.
-
----
-
-## Cybersecurity Analogy
-
-Imagine Snowy is a castle queen with a sacred treasure (data) that needs to be locked up.  
-Instead of using the **master key** to lock every chest (file), she:
-
-- Creates a random key (**DEK**) for each chest  
-- Locks the chest with that DEK  
-- Then locks that DEK inside a vault (**KMS**) with her **master key**
-
-Now:
-
-- She can rotate the master key without re-locking every chest  
-- If someone finds a chest, they still need the DEK *and* the master key  
-- The system scales beautifully across thousands of chests (files)
-
-> This is envelope encryption: you don’t expose your vault key to every file — you **wrap the data key** and keep it separate.
-
-## Real-World Analogy
-
-Think of it like **gift wrapping**:
-
-- The data is your present  
-- The DEK is the wrapping paper  
-- The master key (CMK) is the lockbox you keep the wrapping paper in  
-
-You can:
-
-- Tear off the wrapping (decrypt) if you have both  
-- Replace the lockbox (rotate master keys) without touching the gift  
-
-It’s a model that **balances performance, security, and management flexibility**.
-
----
-
-## Why AWS Uses It Everywhere
-
-You’ll see envelope encryption across AWS:
-
-| Service | How It Uses Envelope Encryption |
-|---------|----------------------------------|
-| **KMS** | `GenerateDataKey` creates DEKs that are locally used to encrypt |
-| **S3** | SSE-KMS uses DEKs to encrypt objects, then wraps them with CMKs |
-| **RDS** | Encrypts snapshots and data files with DEKs |
-| **Lambda** | Encrypts environment variables with DEKs |
-| **EBS** | Volumes are encrypted with DEKs stored and wrapped by CMKs |
-
-> In almost all of these cases, AWS **never uses your CMK to encrypt the actual data** — just to wrap the DEK.
-
----
-
-## How It Works (Technical Breakdown)
-
-### Encryption Flow
-
-- Call `GenerateDataKey` from AWS KMS  
-- Returns:
-  - A **plaintext DEK** (used immediately to encrypt your data)  
-  - A **ciphertext DEK** (the same DEK, but encrypted with your CMK)  
-- Use the plaintext DEK to encrypt your data (e.g., AES-GCM)  
-- Store:
-  - The **encrypted data blob**
-  - The **encrypted DEK** (alongside or within the object’s metadata)
-
----
-
-### Decryption Flow
-
-1. Extract the **encrypted DEK**  
-2. Call `Decrypt` in AWS KMS to get the **plaintext DEK**  
-3. Use that DEK to decrypt the data
-
----
-
-## Why Not Just Use the CMK Directly?
-
-CMKs in KMS are:
-
-- Expensive to invoke at scale  
-- Rate-limited (to protect misuse)  
-- Heavily logged in CloudTrail  
-
-If you used your CMK for every encrypt/decrypt call, you’d:
-
-- Hit API throttles  
-- Create massive latency  
-- Risk exposure of your core key material  
-
-Instead, AWS says: **generate a secure DEK**, use it once, **wrap it with the CMK**.
-
-You now get:
-
-- **Speed** (DEK operations are local)  
-- **Safety** (CMK never exposed)  
-- **Auditability** (CMK used only to wrap/unwrap)
-
----
-
-## Security Properties
-
-| Property            | Explanation                                               |
-|---------------------|-----------------------------------------------------------|
-| **Key separation**   | CMK never touches data directly — isolation of key usage |
-| **Auditability**     | Every use of the CMK is logged in CloudTrail             |
-| **Scalability**      | One CMK can protect millions of DEKs                     |
-| **Rotation flexibility** | CMK can be rotated; old encrypted DEKs remain decryptable |
-| **Performance efficiency** | Local data encryption with DEK is fast             |
-
----
-
-## Common Attack Paths and Defenses
-
-| Threat                    | Defense Mechanism                                      |
-|---------------------------|--------------------------------------------------------|
-| **CMK exposure**           | CMK stays in HSM-backed KMS; never leaves AWS infra    |
-| **DEK leakage in memory**  | You must protect the plaintext DEK on your side        |
-| **Replay attacks**         | Use encryption context, authenticated encryption       |
-| **Key reuse across services** | Use different CMKs per app or tenant               |
-| **Loss of wrapped DEKs**   | Store encrypted DEKs with encrypted data reliably      |
-
----
-
-## Envelope Encryption With AWS KMS
-
-When using **KMS**, the envelope model becomes very clean:
-
-### Encryption
-
-```plaintext
-kms: GenerateDataKey → returns plaintext + encrypted DEK
-App: Use plaintext DEK to encrypt data
-App: Store ciphertext + encrypted DEK
-```
-
-### Decryption
-
-```plaintext
-App: Load encrypted DEK → call kms:Decrypt → get plaintext DEK
-App: Use DEK to decrypt ciphertext
-```
-
-> All encryption and decryption happens **locally**.  
-> The only thing **KMS sees is the DEK** — not your actual data.
-
----
-
-## Encryption Context (Optional, But Powerful)
-
-You can pass a **key-value map** (encryption context) when generating and decrypting the DEK:
-
-```json
-{
-  "app": "snowy-ecommerce",
-  "tenant": "blizzard",
-  "env": "prod"
-}
-```
-
-KMS **requires that same context** on decryption.
-
-This:
-
-- Prevents misuse of encrypted DEKs outside their intended context  
-- Helps enforce data integrity and origin binding  
-- Adds an extra layer of logical access control
-
----
-
-## Use Cases for Envelope Encryption
-
-| Use Case                       | Why Envelope Encryption Works Well                          |
-|--------------------------------|--------------------------------------------------------------|
-| Encrypting millions of S3 objects | Each gets a unique DEK, but all use one CMK               |
-| Multi-tenant SaaS platforms     | One CMK per tenant; DEKs per object                        |
-| Database record-level encryption | Per-record DEKs for fine-grained crypto control           |
-| Lambda environment secrets      | Small sensitive blobs; DEKs avoid CMK overuse             |
-| Cross-account data sharing      | Wrap DEKs with recipient's CMK                            |
-
----
-
-## Final Thoughts
-
-**Envelope encryption** is the cryptographic scaffolding behind nearly all modern encryption at scale.
-
-It lets you:
-
-- Encrypt large data securely and quickly  
-- Isolate your master key from raw data  
-- Log and monitor every sensitive key operation  
-- Build trust boundaries between keys, services, and users  
-
-If you're touching **KMS, S3, RDS, EBS**, or any security-focused service in AWS — you're **already using envelope encryption**, even if you didn’t know it.
-
-But now you do — and now you understand how to use it intentionally, securely, and at enterprise scale.
+Envelope encryption is the design pattern behind nearly all encryption at scale in AWS: instead of encrypting data directly with your master key (CMK), you generate a random data encryption key (DEK), encrypt the data locally with the DEK, then encrypt (wrap) the DEK with the CMK and store the wrapped DEK next to the ciphertext. The master key never touches the plaintext data and never leaves KMS, it is used only to wrap and unwrap DEKs. This is why S3, EBS, RDS, DynamoDB, and Lambda can encrypt at massive scale while KMS stays fast, cheap, and auditable. The thing to hold onto: the CMK wraps the DEK and the DEK encrypts the data, so `GenerateDataKey` (one call returning both a plaintext and a wrapped DEK) is the mechanism, `Decrypt` unwraps, and bulk data never streams through KMS, which is exactly why direct CMK encryption is limited to small payloads.
+
+## How it works
+
+- **Encryption is one KMS call plus local work.** `GenerateDataKey` returns a plaintext DEK and the same DEK wrapped under the CMK. You encrypt the data locally with the plaintext DEK (AES-GCM), discard the plaintext DEK from memory, and store the ciphertext together with the wrapped DEK.
+- **Decryption unwraps then decrypts locally.** You read the wrapped DEK, call KMS `Decrypt` to get the plaintext DEK back, then decrypt the data locally. KMS only ever sees the DEK, never your data.
+- **Why not use the CMK directly.** KMS `Encrypt`/`Decrypt` on raw data is capped at small payloads (a few KB), rate-limited, and every call is logged and adds latency. Envelope encryption moves the bulk crypto local, so one CMK protects millions of objects without throttling.
+- **The CMK stays in the HSM-backed boundary.** The master key never leaves KMS (or CloudHSM behind a custom key store), so wrapping and unwrapping happen inside that boundary and the key material is never exposed to your application.
+- **Encryption context binds and audits.** Passing a key-value encryption context on `GenerateDataKey` requires the same context on `Decrypt`, which prevents a wrapped DEK from being unwrapped in the wrong context, and it appears in CloudTrail so you can audit and condition key policies on it.
+- **Rotation stays cheap.** Rotating the CMK does not require re-encrypting data. Old wrapped DEKs remain decryptable under the prior key version that KMS still tracks, so rotation is a key-layer operation, not a data-layer one.
+
+## Direct CMK vs envelope encryption
+
+| Aspect | Direct CMK encrypt | Envelope encryption |
+|---|---|---|
+| **Payload size** | Small (KB-scale limit) | Any size (data encrypted locally) |
+| **KMS calls** | One per encrypt/decrypt of data | One per DEK, reused for the data |
+| **Throughput** | Rate-limited, latency per call | Local, fast, scales to millions |
+| **Master key exposure** | Still never leaves KMS | Never leaves KMS, only wraps DEKs |
+| **Rotation** | Re-encrypt affected data | Rotate CMK, wrapped DEKs still valid |
+
+## What gets tested
+
+- **CMK wraps, DEK encrypts.** The exam expects you to know the master key encrypts the data key, not the data, and that `GenerateDataKey` returns both plaintext and wrapped DEK in one call.
+- **Direct KMS encryption is size-limited.** If a scenario needs to encrypt large objects, the answer is envelope encryption (a DEK), because direct KMS `Encrypt` is capped at a few KB. This is a common distractor.
+- **Rotation does not re-encrypt data.** Rotating a CMK leaves existing wrapped DEKs decryptable, so "rotate the key" does not mean "re-encrypt everything." That is a frequently tested subtlety.
+- **Encryption context for scoping and integrity.** Binding a wrapped DEK to a context (tenant, app, env) that must match on decrypt is the mechanism to prevent cross-context misuse and to enforce logical access control auditable in CloudTrail.
+- **Per-tenant CMK, per-object DEK.** Multi-tenant isolation uses one CMK per tenant with per-object DEKs, giving both blast-radius separation and scale.
+- **KMS sees the DEK, not the data.** In client-side and SDK flows, the plaintext data never reaches AWS, only the DEK does, which is the basis for "AWS never sees my data" claims.
+
+## Limitations
+
+- You are responsible for the plaintext DEK in memory. A DEK that is logged, cached to disk, or left in memory undermines the whole scheme, since it decrypts the data without KMS.
+- The wrapped DEK must be stored reliably with the ciphertext. Lose the wrapped DEK and the data is unrecoverable, even though the CMK is intact.
+- Application compromise still exposes data, because a compromised app holds the credentials to call `Decrypt` and unwrap DEKs legitimately.
+- Reusing one CMK across unrelated services or tenants collapses the blast radius, so key separation is a deliberate design choice envelope encryption enables but does not enforce.
+- Skipping encryption context forfeits the context-binding integrity and misuse protection, weakening the guarantees the pattern can provide.
+- Envelope encryption solves confidentiality and scale, not authorization. IAM and the CMK key policy still decide who can unwrap a DEK, so misconfigured access defeats it regardless of the crypto.

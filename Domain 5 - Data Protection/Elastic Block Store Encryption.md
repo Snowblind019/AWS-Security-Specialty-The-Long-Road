@@ -1,150 +1,41 @@
 # EBS Encryption (Amazon Elastic Block Store)
 
-## What Is It
+EBS encryption provides transparent AES-256 encryption at rest for EC2 block storage (boot volumes, data volumes, snapshots, and volume clones) plus encryption of the data in transit between the instance and the volume, all managed through KMS. It is transparent to the application and has negligible performance cost, so the security value is simple: a copied snapshot, a volume attached elsewhere, or a downloaded backup is unreadable gibberish without access to the KMS key. The catch that dominates exam questions is that encryption is a create-time property of a volume, you cannot toggle it on an existing unencrypted volume, so the fix is always a snapshot, copy-with-encryption, restore path. The thing to hold onto: EBS encryption is per-volume and set at creation, default encryption is a per-Region account setting that only affects new volumes, and the KMS key policy plus IAM together decide who can actually decrypt and mount.
 
-Amazon **EBS** (Elastic Block Store) provides persistent block-level storage for EC2 instances — like a hard drive in the cloud.  
-You can use it for OS volumes, application data, databases, and logs.
+## How it works
 
-**EBS Encryption** enables automatic **encryption at rest** for:
+- **Encryption is transparent and KMS-backed.** New encrypted volumes use AES-256 with a data key from KMS, encrypt/decrypt happens inline with no app changes and no meaningful performance hit. You choose the AWS-managed key `aws/ebs` or a customer-managed CMK for scoped policy, auditing, and separation of environments.
+- **Encryption is inherited down the chain.** Snapshots of an encrypted volume are encrypted, volumes created from an encrypted snapshot are encrypted, and clones stay encrypted. You do not re-decide encryption at each step, it flows from the source.
+- **You cannot encrypt an existing unencrypted volume in place.** The supported path is: snapshot the unencrypted volume, copy the snapshot with encryption enabled (choosing the key), then create a new volume from the encrypted copy and swap it in. The same copy-with-a-different-key step is how you re-key or change the CMK.
+- **Default encryption is a per-Region toggle for new volumes only.** Enabling EBS encryption by default applies to every new volume in that Region, but does not retroactively encrypt existing volumes or snapshots. It is set per Region, so a multi-Region account enables it in each.
+- **Cross-account snapshot sharing needs a CMK grant.** An encrypted snapshot shared to another account is useless there unless that account is granted use of the CMK. The AWS-managed `aws/ebs` key cannot be shared cross-account, so cross-account flows require a CMK.
+- **IAM plus the key policy are the two gates.** IAM controls who can `CreateVolume`, `AttachVolume`, and `CopySnapshot`, while the KMS key policy controls who can decrypt. An attacker who copies a snapshot still needs both the IAM permission and CMK access, and CloudTrail logs the KMS and EBS calls for detection.
 
-- Boot volumes  
-- Data volumes  
-- Snapshots  
-- Volume clones  
-- Attached backups  
-- Even the data in transit between EC2 and **EBS**
+## EBS encryption facts at a glance
 
-This ensures that even if someone:
+| Aspect | Behavior | Exam trap |
+|---|---|---|
+| **When set** | At volume creation | No in-place encryption of existing volume |
+| **Existing unencrypted volume** | Snapshot to encrypted copy to new volume | "Just enable encryption" is wrong |
+| **Default encryption** | Per-Region, new volumes only | Not retroactive, not global |
+| **Snapshots/clones** | Inherit source encryption | Cannot strip encryption by snapshotting |
+| **Cross-account share** | Needs CMK grant to the other account | `aws/ebs` key cannot be shared |
+| **Re-key** | Copy snapshot with a different CMK | No direct key swap on a live volume |
 
-- Copies your snapshot  
-- Mounts your volume  
-- Downloads your backup  
-  - They get only **encrypted gibberish** unless they also have access to the **KMS** key.
+## What gets tested
 
----
+- **No in-place encryption.** Encrypting an existing unencrypted volume is snapshot to encrypted copy to restore. This is the single most tested EBS fact.
+- **Default encryption scope.** Enabling encryption by default covers new volumes in that Region only. It does not encrypt old volumes and must be enabled per Region.
+- **Cross-account snapshot sharing requires a CMK.** Sharing an encrypted snapshot to another account works only if the target account is granted use of the customer-managed key. Default AWS-managed keys cannot cross accounts.
+- **Two-gate access.** Reading an encrypted volume needs both IAM permission on the EBS action and access to the KMS key. Denying the role on the CMK blocks decryption even if IAM allows the attach.
+- **Encryption inheritance.** You cannot use snapshot-and-restore to remove encryption. Anything derived from an encrypted source stays encrypted, which is often a distractor answer.
+- **Detection.** Config rules flag unencrypted volumes and snapshots, and CloudTrail plus CMK logging surface unusual `CreateVolume`, `CopySnapshot`, and `Decrypt` activity.
 
-## Cybersecurity Analogy
+## Limitations
 
-Imagine you’re using an external hard drive to store sensitive work documents. You keep it **password-protected and encrypted** — so even if someone steals it from your bag, they can’t open it.
-
-**EBS** encryption works the same way.  
-**No key = no access**, even if the volume is stolen, copied, or improperly shared.
-
----
-
-## Real-World Analogy
-
-Think of **EBS** encryption like putting a **safe inside your cloud server**.  
-Your **EC2** might be running normally, but behind the scenes, the disk writes and reads **from an encrypted safe**.  
-No user or attacker ever sees the raw disk unless their **IAM** role and the **KMS** key policy allow it.
-
-## How EBS Encryption Works
-
-- When you create an encrypted **EBS** volume, AWS uses **AES-256** encryption under the hood.
-- Encryption and decryption are handled **transparently**:  
-  - Your app doesn’t know it’s encrypted  
-  - Your performance is unaffected  
-- Keys are managed in **AWS Key Management Service (KMS)**
-- You can use:  
-  - **AWS-managed key** (alias: `aws/ebs`)  
-  - **Customer-managed key (CMK)** for granular control  
-
-All snapshots created from encrypted volumes remain encrypted.  
-All new volumes from encrypted snapshots inherit the encryption.
-
-Since 2020, **encryption by default** is supported — and highly recommended.
-
----
-
-## SnowySec EBS Flow Example
-
-**Snowy’s** production workloads run across 30 EC2 instances with encrypted **EBS** volumes. Here's how the workflow is hardened:
-
-1. A custom **CMK** (`snowy-ebs-prod-key`) is created in **KMS**  
-2. Default encryption for **EBS** is enabled account-wide using that **CMK**  
-3. EC2 launch templates are configured to use encrypted volumes only  
-4. **IAM** policies restrict EC2 roles from launching unencrypted volumes  
-5. **EBS** snapshots are encrypted and stored with lifecycle policies in S3 Glacier  
-6. **CloudTrail** monitors all `CreateVolume`, `CopySnapshot`, `AttachVolume` calls  
-7. Config rules detect and alert if an unencrypted volume or snapshot is found  
-8. Tagging policies enforce `Sensitive=True` for all encrypted resources  
-9. **KMS** key usage is logged, and alerts are triggered for abnormal decryption events  
-
-This means:  
-If an attacker gains access to EC2 and copies a snapshot — they’ll need to also compromise the **CMK** and **IAM** role.  
-No key? No breach.
-
----
-
-## Security Use Cases
-
-| Threat                               | **EBS Encryption Mitigation**                                             |
-|--------------------------------------|---------------------------------------------------------------------------|
-| Rogue admin copies snapshot          | Snapshot remains encrypted; requires **CMK** to decrypt                   |
-| Volume attached to unauthorized EC2  | **CMK** access denied, volume won't decrypt or mount                      |
-| Snapshot shared across accounts      | **KMS** prevents cross-account decrypt unless explicitly granted          |
-| Insider exfiltrates **EBS** clone    | Encrypted volume unusable without matching key access                     |
-| EC2 malware attempts disk readout    | Volume reads pass through encryption; unauthorized access fails           |
-
----
-
-## Best Practices for EBS Encryption
-
-- **Enable default encryption** for all Regions and accounts  
-- Use **customer-managed CMKs** for separation of environments (prod vs dev)  
-- Monitor and log all `KMS:Decrypt`, `CreateSnapshot`, and `AttachVolume` events  
-- Apply **Config rules** to flag unencrypted volumes or snapshots  
-- Use **lifecycle policies** to clean up unused encrypted snapshots  
-- Rotate **CMKs** periodically and audit usage with **CloudTrail**  
-- Use **resource-based policies and grants** for tight key access control  
-- **Prevent cross-account snapshot sharing** unless absolutely necessary  
-
----
-
-## Service Integrations That Matter
-
-| Service      | Why It Matters                                                                 |
-|--------------|---------------------------------------------------------------------------------|
-| **KMS**      | Stores and manages keys, controls access, logs usage                           |
-| **CloudTrail** | Audits all **EBS** and **KMS-related** API activity                         |
-| **EC2**      | Attaches/detaches volumes, must honor encryption settings                      |
-| **Config**   | Detects non-compliant volumes or snapshots                                     |
-| **Security Hub** | Flags **misconfigurations** in encryption posture                        |
-| **IAM**      | Controls who can launch, attach, or decrypt encrypted volumes                  |
-
----
-
-## Pricing Overview
-
-| Item             | Cost                                                                  |
-|------------------|-----------------------------------------------------------------------|
-| **EBS encryption** | **Free** — no extra cost for encryption itself                     |
-| **KMS CMKs**     | ~$1/month per key                                                     |
-| **KMS usage**    | ~$0.03 per 10,000 API calls (Encrypt/Decrypt)                         |
-| **Snapshots**    | Priced by storage usage; remains encrypted                            |
-
----
-
-## Common Misunderstandings
-
-- Encryption adds performance overhead → **False** (*EBS encryption is optimized*)  
-- You can decrypt **EBS** manually with a password → **False** (*only via IAM+KMS policies*)  
-- Snapshots lose encryption → **False** (*they stay encrypted always*)  
-- Default encryption applies to old volumes → **False** (*only future volumes*)  
-
----
-
-## Final Thoughts
-
-**EBS encryption is your zero-effort seatbelt.**  
-You turn it on once — and forget it. But when something goes wrong, it’s the barrier that keeps your data sealed.
-
-**It doesn’t prevent access.**  
-But it ensures that **access doesn’t equal understanding**.  
-Even a full volume dump is worthless without **KMS** keys and **IAM** permissions.
-
-**In the world of cloud breaches, encryption isn’t the only layer — but it’s the last one that matters.**
-
-**SnowySec** uses it for everything — boot, backup, batch jobs, even the bastion host.
-
-Because *“unreadable data is unstealable data.”*
+- Encryption is a create-time property, so remediating an unencrypted volume always means creating a new volume and cutting over, not flipping a switch.
+- Default encryption is not retroactive and is set per Region, so relying on it does nothing for volumes and snapshots that already exist or for other Regions.
+- The AWS-managed `aws/ebs` key cannot be shared cross-account, which forces a CMK for any cross-account snapshot workflow.
+- Encryption protects confidentiality only. It does not stop an authorized-but-malicious principal who has both the IAM permission and CMK access, so key-policy scoping and monitoring still matter.
+- CMK usage adds KMS request costs on high-I/O fleets and per-key monthly charges, so many environment-specific keys carry a real bill.
+- Encryption does not prevent access to a running instance's mounted filesystem. Malware on a live EC2 reads through the decrypted mount, so EBS encryption defends against offline theft of the volume, not in-guest compromise.

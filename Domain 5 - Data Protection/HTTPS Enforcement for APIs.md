@@ -1,171 +1,39 @@
-# HTTPS Enforcement For APIs
+# HTTPS Enforcement for APIs
 
-## What It Is
+Any API, internet-facing or internal, has to encrypt traffic in transit or it leaks credentials, tokens, query parameters, PII, and responses to anyone sniffing, and it opens the door to MITM modification and replay. In AWS the enforcement point depends on the fronting pattern: API Gateway is HTTPS-only by default, an ALB in front of ECS/EC2 needs an HTTPS listener plus an HTTP-to-HTTPS redirect, CloudFront needs both viewer and origin protocol policies locked down, and raw EC2 forces you to manage certs yourself. The recurring gap is the origin hop and the redirect: encrypting only the client side while leaving CloudFront-to-origin or ALB-to-target on plaintext is the classic mistake. The thing to hold onto: match the enforcement to the entry point, always cover both hops (viewer and origin), and reach for mTLS when the requirement is authenticating the calling service, not just encrypting the channel.
 
-Any API exposed over the internet (or even internally!) must encrypt all traffic **in transit**. Otherwise, you're exposing:
+## How it works
 
-- Credentials  
-- Tokens (JWT, OAuth)  
-- Query params  
-- PII  
-- Business logic  
-- Responses  
+- **API Gateway is HTTPS-only by default.** It listens only on 443, so the work is securing custom domain names with an ACM cert and a TLS 1.2+ minimum, and never fronting it with something that terminates TLS and forwards plaintext.
+- **ALB-backed APIs need a listener plus a redirect.** Create an HTTPS listener on 443 with an ACM cert and a strong security policy, then add an HTTP listener on 80 whose default action redirects to HTTPS (301). Without the redirect, clients can still reach the API over plaintext.
+- **CloudFront covers two hops.** Set the viewer protocol policy to redirect-to-HTTPS or HTTPS-only, set a TLS 1.2+ viewer security policy, and set the origin protocol policy to HTTPS-only so the edge-to-origin hop is encrypted too. Leaving origin at match-viewer or HTTP-only leaves a plaintext segment.
+- **Raw EC2 makes it all manual.** You install and manage certs (via a web server, or terminate at an ALB with ACM), listen only on HTTPS, and redirect HTTP with a 301. Direct EC2 exposure is discouraged precisely because you own the whole TLS lifecycle.
+- **mTLS authenticates the caller.** For internal service-to-service APIs, mutual TLS (via App Mesh/Envoy or NGINX sidecars, with client certs from ACM Private CA or SPIFFE/SPIRE) verifies both ends, giving zero-trust identity on the call rather than just an encrypted pipe.
 
-Without HTTPS, all of it can be:
-- **Sniffed** (on open Wi-Fi, compromised proxies, etc.)  
-- **Modified** (MITM-injection)  
-- **Replayed** (session hijacking)  
+## Enforcement by API pattern
 
-**HTTPS ≠ Optional**  
-It’s your first line of defense for any client-to-API connection.
+| Pattern | Enforcement | Watch for |
+|---|---|---|
+| **API Gateway (REST/HTTP)** | HTTPS by default, ACM on custom domain | Don't front it with plaintext-forwarding TLS termination |
+| **ALB (ECS/EC2)** | HTTPS listener + 80-to-443 redirect | Missing redirect leaves HTTP open |
+| **CloudFront to API** | Viewer + origin protocol policies | Origin match-viewer/HTTP is a plaintext hop |
+| **Raw EC2** | Self-managed certs, HTTPS-only, 301 | Whole TLS lifecycle is on you |
+| **Internal microservices** | mTLS via sidecar / App Mesh | Cert rotation and trust store management |
 
----
+## What gets tested
 
-## Cybersecurity Analogy
+- **API Gateway is already HTTPS-only.** The exam expects you to know it does not accept plaintext, so the enforcement work is on custom domains, TLS minimum, and not undermining it upstream.
+- **ALB needs the redirect, not just the HTTPS listener.** Forcing all traffic to HTTPS requires both the 443 listener and an 80-to-443 redirect action. An HTTPS listener alone still leaves port 80 reachable.
+- **CloudFront origin protocol is the trap.** Encrypting the viewer hop but leaving origin at match-viewer or HTTP-only means CloudFront-to-origin can be plaintext. HTTPS-only origin protocol is required for edge-to-origin encryption.
+- **mTLS for caller identity.** When the requirement is authenticating which service is calling (not just encrypting), that is mutual TLS, typically via a service mesh, with certs from ACM Private CA.
+- **TLS 1.2+ security policy.** Compliance-driven scenarios want a modern security policy on the ALB or CloudFront, not a legacy one that permits TLS 1.0.
+- **ACM for cert lifecycle.** Auto-renewing certs from ACM (server side) beat self-managed certs, and the CloudFront cert must be in `us-east-1`.
 
-Your API is a courier picking up and delivering sensitive information.
+## Limitations
 
-- With HTTP: he’s driving an open convertible shouting your data at traffic lights.  
-- With HTTPS: he’s inside an **armored truck** with bulletproof glass and sealed doors.
-
----
-
-## Real-World Analogy
-
-Think of HTTPS as the **envelope** your message goes in.
-
-Sending an API call over HTTP is like writing sensitive medical data on a **postcard** and mailing it.  
-HTTPS is the **sealed envelope** that only the recipient can open — even if someone intercepts it, they see nothing.
-
----
-
-## Where To Enforce HTTPS For APIs In AWS
-
-| API Pattern               | Enforcement Method                                       |
-|---------------------------|----------------------------------------------------------|
-| API Gateway (REST/HTTP)   | HTTPS enforced by default                                |
-| ALB-backed EC2 or ECS     | HTTPS listener + redirect from HTTP                      |
-| CloudFront in front of API| Viewer & origin protocol policy                          |
-| Raw EC2 API               | Install/manage certs manually                            |
-| App Mesh / Service Mesh   | Use mTLS or TLS via sidecar proxy                        |
-
-## 1. Amazon API Gateway
-
-**HTTPS enforced by default** — listens only on port 443.
-
-Still, you must secure:
-
-- **Custom Domain Names**: Use ACM certs, enforce TLS 1.2+  
-- **Signed URLs / API Keys / Tokens**:  
-  - Always send over HTTPS  
-  - Never leak in HTTP referrers or logs  
-
-**Do not terminate TLS in front of API Gateway** and forward insecure traffic.
-
-## 2. ALB-Backed APIs (ECS or EC2)
-
-Very common: **ALB → public API → EC2/ECS**  
-
-### How To Enforce HTTPS
-
-- Create HTTPS Listener (port 443)  
-- Attach ACM certificate  
-- Set security policy to `ELBSecurityPolicy-TLS-1-2-Ext-2018-06` or newer  
-- Add HTTP Listener (port 80) that redirects to HTTPS  
-
-```bash
-aws elbv2 modify-listener \
-  --listener-arn ... \
-  --default-actions Type=redirect,...
-```
-
-Now all API calls are forced over HTTPS with automatic redirect from HTTP.
-
-## 3. CloudFront → API
-
-If CloudFront fronts your API (caching, edge access):
-
-- **Viewer Protocol Policy**:  
-  - `Redirect HTTP to HTTPS` (usable)  
-  - `HTTPS Only` (stricter)  
-- **Client TLS Policy**: Enforce `TLSv1.2_2021` or newer  
-- **Origin Protocol Policy**: `HTTPS Only`  
-
-This ensures TLS from **client → edge → origin**
-
-## 4. Raw EC2 API (No Load Balancer)
-
-If exposing APIs directly from EC2:
-
-- Install NGINX/Apache with valid certs  
-- Use **Let’s Encrypt** or **ACM** (via ALB)  
-- Configure app to:
-  - Listen only on `https://`  
-  - Redirect `http://` to HTTPS with 301  
-
-> Avoid exposing APIs directly on EC2 unless absolutely necessary.
-
-## 5. mTLS For Internal APIs (Advanced)
-
-For internal microservice APIs, enforce **mutual TLS (mTLS)**:
-
-- Use NGINX or Envoy **sidecars**  
-- Validate client certs  
-- Rotate certs using **ACM PCA** or **SPIRE/SDS**
-
-This gives you **zero-trust-level identity enforcement** on internal service calls.
-
----
-
-## Common Pitfalls
-
-| Mistake                        | Why It’s Risky                              |
-|-------------------------------|---------------------------------------------|
-| ALB listener is HTTP-only      | Entire API exposed in plaintext             |
-| Forgot to redirect port 80     | Users may still use HTTP                    |
-| CloudFront viewer = `AllowAll` | Allows downgrade + MITM                     |
-| No TLS at origin               | CloudFront → API traffic is unencrypted     |
-| Self-signed certs unpinned     | Breaks trust model — vulnerable to spoofing |
-
----
-
-## Best Practices Summary
-
-| Control                        | Purpose                                     |
-|-------------------------------|---------------------------------------------|
-| HTTPS-only listener / protocol| Prevents plaintext API exposure             |
-| TLS 1.2+ security policy       | Strong ciphers, forward secrecy             |
-| ACM certificate management     | Auto-rotating trusted certs                 |
-| Redirect HTTP to HTTPS (301)  | Seamless enforcement without breakage       |
-| mTLS for internal APIs         | Authenticate caller identity over TLS       |
-| CloudWatch logs / metrics      | Detect failed TLS handshakes, downgrade attempts |
-
----
-
-## Real-Life Example (Snowy’s Auth API)
-
-Snowy deploys an ECS service behind ALB:
-
-- HTTPS Listener only  
-- ACM cert with TLS 1.2 policy  
-- HTTP listener redirects to HTTPS  
-- Internal service-to-service calls use **mTLS** via NGINX  
-- CloudFront caches `/public/*` paths with **HTTPS-only** viewer policy  
-
-### Result:
-
-- End-users can only hit the API via HTTPS  
-- All tokens/PII are protected in transit  
-- Admins get alerts if a TLS negotiation fails  
-- Even **inside the VPC**, traffic is authenticated and encrypted
-
----
-
-## Final Thoughts
-
-APIs are the **front doors** to your business logic — and if those doors allow HTTP, you're leaving your app, users, and data wide open.
-
-Enforcing HTTPS for APIs isn't just about privacy — it’s about **integrity**, **identity**, **trust**, and **compliance**.
-
-Whether you're using **API Gateway**, **ALB**, **CloudFront**, or **raw EC2** —  
-**encrypt every byte**, from **edge to origin**.
+- Encrypting the viewer hop alone is insufficient. The origin hop (CloudFront-to-origin, ALB-to-target) must also be secured or a plaintext segment remains.
+- An HTTPS listener without an HTTP-to-HTTPS redirect still exposes port 80, so enforcement needs both pieces on an ALB.
+- HTTPS encrypts and integrity-protects the channel but does not authenticate the caller. Verifying who is calling an internal API requires mTLS on top.
+- Raw EC2 exposure shifts the entire TLS burden (issuance, rotation, redirect, cipher policy) to you, which is error-prone compared with API Gateway, ALB, or CloudFront.
+- Self-signed or unpinned certs break the trust model and are vulnerable to spoofing, so managed certs (ACM) or a proper private CA are required for real assurance.
+- Transit encryption does nothing for authorization or at-rest protection, so it must pair with token/IAM auth, WAF, and encrypted storage rather than standing alone.

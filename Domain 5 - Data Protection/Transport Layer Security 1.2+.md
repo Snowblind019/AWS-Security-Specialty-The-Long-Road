@@ -1,147 +1,40 @@
 # TLS 1.2+
 
-## What Is TLS (and Why 1.2+ Matters)
+TLS is the protocol securing data in transit: it encrypts traffic on the wire, authenticates endpoints via certificates, and detects tampering and MITM. The version matters because TLS 1.0 and 1.1 are deprecated and vulnerable to downgrade and cipher attacks (POODLE, BEAST), while only TLS 1.2 and 1.3 meet modern and compliance baselines (PCI DSS, HIPAA, NIST). Across AWS, enforcing TLS 1.2+ is a per-service job at each edge: a security policy on ALB and CloudFront sets the minimum version and ciphers, S3 uses a policy condition, and databases enforce it via parameters. The thing to hold onto: enforcing the TLS floor is choosing a modern security policy on ALB/CloudFront, the S3 lever is `aws:SecureTransport`, API Gateway is already TLS 1.2+ with no downgrade, and "supports TLS" is not "enforces TLS" for databases, where the client or a parameter must require it.
 
-**TLS (Transport Layer Security)** is the protocol that encrypts data in **transit** — securing everything from HTTPS websites to secure APIs, RDS connections, and email relays.
+## How it works
 
-It:
+- **CloudFront: minimum viewer TLS via security policy.** Set the minimum protocol version (for example TLSv1.2_2021) and an HTTPS-only or redirect viewer policy, with an ACM cert in `us-east-1`. This removes weak protocols and ciphers on the client hop.
+- **ALB: HTTPS listener plus a modern security policy.** Choose a TLS 1.2 or TLS 1.3 security policy (for example an `ELBSecurityPolicy-TLS-1-2` or `-TLS-1-3` policy) on the HTTPS listener to set the version floor and cipher suite, and redirect port 80 to 443.
+- **S3: `aws:SecureTransport` deny.** A bucket policy denying requests where `aws:SecureTransport` is false blocks all non-TLS access, uniformly across CLI, SDKs, and tools. This is the S3 in-transit control.
+- **RDS/Aurora: enforce per engine.** Force TLS with `rds.force_ssl=1` (PostgreSQL) or `require_secure_transport=ON` (MySQL) in a parameter group, and have clients use SSL with the RDS CA bundle (`sslmode=require`/`verify-full`), optionally client certs for mTLS.
+- **API Gateway: TLS 1.2+ by default.** It enforces TLS 1.2+ and cannot be downgraded, so the work is attaching an ACM cert to a custom domain, not enabling TLS.
+- **Monitoring.** CloudWatch can surface TLS negotiation failures, S3 denials of plaintext requests, and ACM renewal failures, so downgrade attempts and cert problems are visible.
 
-- Encrypts your data on the wire
-- Authenticates endpoints via certificates
-- Detects tampering and **MITM** attempts
+## Enforcing TLS 1.2+ by service
 
-But here's the catch:
-There are multiple versions of **TLS** — and **only TLS 1.2 and TLS 1.3** are secure by today’s standards.
+| Service | Mechanism | Note |
+|---|---|---|
+| **CloudFront** | Minimum viewer TLS security policy | ACM cert in `us-east-1` |
+| **ALB / NLB** | HTTPS listener + TLS 1.2/1.3 security policy | Redirect 80 to 443 |
+| **S3** | Bucket policy `aws:SecureTransport=false` deny | Applies to all clients |
+| **RDS / Aurora** | `rds.force_ssl` / `require_secure_transport` | Client uses RDS CA bundle |
+| **API Gateway** | TLS 1.2+ by default | Cannot downgrade |
 
-| Version  | Status        | Notes                                      |
-|----------|---------------|--------------------------------------------|
-| **TLS** 1.0 | ✖️ Deprecated | Vulnerable to POODLE, BEAST, etc.          |
-| **TLS** 1.1 | ✖️ Deprecated | Weak ciphers, no longer supported          |
-| **TLS** 1.2 | ✔️ Secure     | Widely used, strong ciphers                |
-| **TLS** 1.3 | ✔️ Most Secure| Faster handshake, perfect forward secrecy |
+## What gets tested
 
----
+- **TLS 1.0/1.1 are non-compliant.** Enforcing TLS 1.2 minimum on ALB/CloudFront via a modern security policy is the answer for PCI/HIPAA and to block downgrade attacks. Legacy policies that permit TLS 1.0 are wrong.
+- **S3 in-transit is `aws:SecureTransport`.** Requiring TLS to a bucket is the bucket policy condition, not a security group (which does not apply to S3) or client trust alone.
+- **Database TLS is enforced, not assumed.** RDS supporting TLS does not mean it is required. Forcing it is a parameter (`rds.force_ssl`/`require_secure_transport`) plus client SSL config, and validation needs the CA bundle.
+- **API Gateway is already TLS 1.2+.** No enabling needed, and it cannot be downgraded, so encryption in transit is inherent there.
+- **Cert validation prevents MITM.** Encrypting without validating the server cert leaves a MITM gap, so clients must validate (verify-full), and ACM handles server cert lifecycle and rotation.
+- **CloudFront cert region.** The viewer cert must be in `us-east-1`, a recurring misconfiguration.
 
-## How to Enforce **TLS 1.2+** in AWS
+## Limitations
 
-**CloudFront (CDN)**
-
-```plaintext
-ViewerProtocolPolicy: https-only
-MinimumProtocolVersion: TLSv1.2_2021
-```
-
-- Use custom **SSL** with **ACM**
-- Use **Security Policy** to enforce **TLS** version and cipher suite
-- Redirect **HTTP to HTTPS** at viewer level
-
-**ALB (Application Load Balancer)**
-
-- Choose HTTPS Listener
-- Set security policy to one of:
-  - `ELBSecurityPolicy-TLS-1-2-2017-01`
-  - `ELBSecurityPolicy-TLS-1-2-Ext-2018-06`
-  - Or `ELBSecurityPolicy-TLS-1-3-2021-06` for **TLS 1.3** support
-
-```bash
-aws elbv2 modify-listener \
-  --listener-arn arn:... \
-  --protocol HTTPS \
-  --ssl-policy ELBSecurityPolicy-TLS-1-2-Ext-2018-06
-```
-
-**S3 — Deny Unencrypted Requests**
-
-```json
-"Condition": {
-  "Bool": {
-    "aws:SecureTransport": "false"
-  }
-}
-```
-
-- This blocks any **non-TLS** S3 request
-- Works across AWS **CLI**, **SDKs**, third-party tools
-
-**RDS**
-
-- Enable `require_ssl` or `rds.force_ssl=1` in DB parameter group
-- Use **SSL** connection strings (e.g., `?sslmode=require`)
-- Enforce client certs if needed (for **mTLS**)
-
-**API Gateway**
-
-- **TLS 1.2 is enforced by default** — you can’t downgrade it
-- Attach custom domain and **ACM** cert for public APIs
-
----
-
-## Common TLS Mistakes in AWS
-
-| Mistake                          | Consequence                                  |
-|----------------------------------|----------------------------------------------|
-| Allowing **TLS 1.0/1.1** in ALB | Weak encryption; non-compliance              |
-| Not setting `aws:SecureTransport` | Allows plaintext access to S3               |
-| No cert rotation for EC2 apps   | Expired certs → outages, insecure fallback   |
-| Not validating certs in **SDKs** | Opens door to **MITM** even with **TLS**     |
-| Misconfigured cipher suites     | Prevents modern clients from connecting      |
-
----
-
-## Best Practices Summary
-
-| Recommendation                              | Why It Matters                              |
-|---------------------------------------------|----------------------------------------------|
-| Enforce **TLS 1.2 or 1.3** on all endpoints | Avoid legacy downgrade attacks              |
-| Use **ACM certificates**                   | Simplifies management, auto-renew           |
-| Use **Security Policies** on ALB/CF        | Controls cipher suite + **TLS** version     |
-| Block **non-TLS** with S3 bucket policy    | Prevents API access over HTTP               |
-| Monitor **TLS** connections with **CloudWatch** | Detect **TLS** errors or downgrade attempts |
-| Validate **TLS** in all client **SDKs**    | Ensures traffic is actually encrypted       |
-
----
-
-## Real-Life Example (Winterday’s FinTech App)
-
-**Winterday’s** API is hosted behind:
-
-**CloudFront → ALB → EC2**
-
-They configure:
-
-- **CloudFront** to use `TLSv1.2_2021` only
-- **ALB** with `ELBSecurityPolicy-TLS-1-2-Ext-2018-06`
-- **S3** bucket with `aws:SecureTransport` policy
-- **RDS** with **SSL** required and PostgreSQL cert validation
-- All clients use **SDKs** that enforce **TLS 1.2**
-
-**CloudWatch** alarms trigger if:
-
-- A **TLS** negotiation fails
-- **S3** denies a plaintext request
-- **ACM** cert renewal fails
-
-This ensure:
-✔️ Compliance with **PCI DSS**
-✔️ **TLS 1.0/1.1** completely blocked
-✔️ Everything encrypted, monitored, and policy-enforced
-
----
-
-## Final Thoughts
-
-**TLS is the backbone of encryption in transit.**
-And in the cloud, that means **TLS 1.2 is the baseline** — and **TLS 1.3 is the future**.
-
-If you’re still accepting **TLS 1.0 or 1.1**, you’re inviting:
-
-- Compliance violations (**PCI**, **HIPAA**, **NIST**)
-- Downgrade attacks
-- Insecure connections in your most exposed layer
-
-**Enforce TLS at every edge.**
-Rotate certs.
-Use strong ciphers.
-Monitor for failures.
-
-Because plaintext belongs in history books — not production systems.
+- Defaults can be permissive: legacy ALB/CloudFront security policies allow TLS 1.0/1.1, so you must explicitly select a TLS 1.2+ policy.
+- TLS support is not enforcement, especially for databases, where an unconfigured client connects in plaintext unless the engine forces TLS.
+- Encryption without certificate validation still allows MITM, so `verify-full`-style validation and current CA bundles are required, not just enabling SSL.
+- Certificate rotation matters: expired certs cause outages or insecure fallbacks, and AWS RDS cert rotation requires updating client trust stores.
+- TLS protects the wire, not data at rest or authorization, so it pairs with encryption at rest and IAM rather than standing alone.
+- Redirecting HTTP to HTTPS still exposes the initial plaintext request line, so the strictest endpoints reject rather than redirect, and enforcement must cover both hops (viewer and origin) where a CDN or load balancer is involved.

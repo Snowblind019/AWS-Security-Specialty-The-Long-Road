@@ -1,205 +1,39 @@
 # Amazon EFS Encryption
 
-## What Is Amazon EFS Encryption
-
-Amazon **EFS** (Elastic File System) is AWS’s managed **NFS** file share that can be mounted across EC2 instances, containers, and Lambda functions. It’s great for use cases where multiple compute nodes need **shared, low-maintenance, POSIX-compliant file storage**.
-
-But here's the problem: **data in shared filesystems is vulnerable** — especially when:
-
-- You mount the same share on multiple machines  
-- You rely on legacy **NFS** permissions  
-- You operate across multiple **AZs**  
-
-That's why **EFS Encryption** is critical. It protects the **entire lifecycle of data**:
-
-- **At rest** — encrypted using AWS **KMS**  
-- **In transit** — encrypted via **TLS** during **NFS** client communications  
-
-When encryption is enabled, files are automatically encrypted with **256-bit AES keys**, and access control is enforced by **IAM policies**, **security groups**, and **POSIX permissions**.
-
-It’s all invisible to the app — but vital to the security architect.
-
----
-
-## Cybersecurity Analogy
-
-Think of **EFS** like a **shared team drive in a corporate war room.** Everyone’s dropping docs, picking up files, editing configurations.
-
-Now imagine if:
-
-- That drive wasn’t locked in a safe (no encryption at rest)  
-- Or if the hallway leading to it had no cameras (unencrypted transit)  
-- Or if old users could still sneak in (no **IAM**)  
-
-**EFS Encryption** is the combination of:
-
-- **Locking the safe** (**KMS** encryption at rest)  
-- **Watching the hallway** (**TLS** in-transit)  
-- **Controlling access** to who can even enter the war room (**IAM** + security groups)  
-Without all 3? Someone *will* walk in, pick up sensitive data, and leave — and you won’t even know they were there.
-
-## Real-World Analogy
-
-Let’s say **Winterday DevOps** mounts **EFS** to 10 EC2 instances spread across **3 AZs**. This shared volume holds:
-
-- Bash scripts  
-- Lambda layer files  
-- JSON config with sensitive keys (bad idea, but it happens)  
-- Application log files  
-
-If **EFS encryption** isn’t enabled:
-
-- Anyone gaining access to the EC2 instance could read the plaintext data off disk  
-- Data replicated across **AZs** could be intercepted by rogue insiders (in a worst-case scenario)  
-- Root-level compromise on one instance = full access to everything stored on **EFS**  
-
-Now imagine a rogue container running in the same **VPC** — if it can mount the **EFS** volume (and there’s no **IAM** restriction), it can scrape sensitive files with `cat`.
-
-**Winterday** enables:
-
-- **EFS Encryption at Rest** using AWS **KMS CMK**  
-- **TLS in-transit encryption** on all mount points  
-- **IAM identity-based access control** using `efs:ClientMount` and `efs:ClientWrite`  
-- **Security group boundaries** to allow **NFS** only between known EC2 **IPs**
-
-> Result: even if someone gets onto an instance, they can’t scrape the contents, intercept the **NFS** stream, or mount the volume from elsewhere without **IAM** access.
-
----
-
-## How It Works
-
-### 1. Encryption at Rest
-
-- Enabled when the file system is **created** (cannot be enabled later)  
-- Uses **AWS KMS** (either AWS-managed key or customer-managed **CMK**)  
-- Encrypts:  
-  - File content  
-  - Metadata  
-  - Directory names  
-  - Snapshots  
-
-**EFS uses envelope encryption:**
-
-- Generates a unique data key per object  
-- Encrypts that key with the **KMS** key (**CMK**)  
-- Stores the encrypted data + encrypted key together  
-- Decryption happens on-the-fly when accessed
-
-### 2. Encryption in Transit
-
-- Uses **TLS 1.2** between client and **EFS** mount target  
-
-- Requires mounting with the `-o tls` option:
-
-```bash
-
-sudo mount -t nfs4 -o tls fs-12345678.efs.us-west-2.amazonaws.com:/ efs
-```
-
-- Works only with **Amazon-provided NFS client** (`amazon-efs-utils`)  
-- Protects against:  
-
-  - MITM attacks  
-  - Passive packet sniffing  
-  - Credential/session leakage
-
-### 3. Key Rotation
-
-- If using a customer-managed **CMK** (vs. the default `aws/elasticfilesystem` key), you can:
-  - Enable **automatic rotation**  
-  - Re-encrypt files with a new **CMK** manually (not retroactive by default)  
-- All key usage is logged in **CloudTrail**
-
----
-
-## Pricing Models
-
-Encryption itself is **free**, but you pay for:
-
-- **AWS KMS requests**
-  - Each encryption/decryption counts as a **KMS** operation  
-  - You pay per 10,000 operations (unless using default key, which is free)
-
-- **Storage costs**
-  - **EFS** encrypted or not, storage pricing is the same (Standard/IA tiers)
-
-- **Data transfer**
-  - In-transit **TLS** encryption doesn’t cost extra, but **cross-AZ traffic still bills**
-
-> If you’re using customer **CMKs** heavily (e.g., thousands of files read per second), **KMS** costs can add up — but for most orgs, it's negligible compared to the risk reduction.
-
----
-
-## Other Explanations / Gotchas
-
-- **You can’t turn on encryption after EFS is created.** You must:
-  - Backup → recreate a new encrypted **EFS** → restore data
-
-- **CloudTrail + KMS Logs:** always enable these for auditability  
-  - You want visibility into who decrypted what and when
-
-- **Data still readable by root:** encryption at rest prevents physical disk access attacks, not compromised OS users — always combine with **IAM** and OS-level security
-
-- **POSIX permissions still apply:** encryption doesn’t override Linux-style file perms — use them properly
-
-- **Don’t assume TLS is enabled by default** — you must mount with the correct client + flag
-
----
-
-## Real-Life Example: SnowyCorp ML Cluster
-
-**SnowyCorp** runs a **SageMaker** model training pipeline where:
-
-- EC2 nodes process training data in real-time  
-- Logs and checkpoints are written to **EFS** for durability and sharing  
-- Shared **EFS** volume is mounted by 4 EC2s across **2 AZs**
-
-**Security setup includes:**
-
-- **EFS created with CMK** for encryption at rest  
-- Mounted with `amazon-efs-utils` using **TLS**  
-- EC2 **IAM** roles scoped to:  
-  - `efs:ClientMount`  
-  - `efs:ClientWrite`  
-  - `kms:Decrypt` on **CMK**  
-- Security group only allows **NFS** from specific EC2 instance **IPs**  
-- **CloudTrail** logs every **KMS** decrypt operation  
-- **GuardDuty** monitors for anomalous **NFS** port scanning in **VPC**
-
-> If any EC2 is compromised, an attacker can’t:
-> - Mount the volume from another machine (**IAM** blocked)  
-
-> - Read files on disk (**KMS** protected)  
-> - Sniff data in transit (**TLS** encrypted)  
-
-
-**SnowyCorp sleeps better at night.**
-
----
-
-## Final Thoughts
-
-**EFS is simple. And that’s exactly why it can be dangerous.**
-
-When you give multiple EC2s access to a shared filesystem, you're introducing a **horizontal attack surface**. One weak node = lateral read access to all your data.
-
-- **Encryption at rest** protects your data if the volume is copied, stolen, or snapshots are shared.  
-- **Encryption in transit** protects you from eavesdropping and **MITM** during active sessions.
-
-But neither of those protect you from:
-
-- Bad **IAM** policies  
-- Open security groups  
-- Malicious insiders with EC2 access  
-
-Encryption is one layer. Don’t stop there. Use it in conjunction with:
-
-- **IAM** policies (least privilege)  
-- Logging (**CloudTrail + KMS + GuardDuty**)  
-- Mount restrictions (**SGs** + **TLS-only** clients)  
-- Filesystem permissions (**POSIX**)  
-- Separation of data between environments (*dev vs. prod*)  
-
-> **If you're serious about security, never deploy EFS without encryption at both ends.**  
-> It's one checkbox — but it locks down a world of risks.
-
+Amazon EFS is AWS's managed NFS file share, mountable across many EC2 instances, containers, and Lambda functions at once, which is exactly what makes its encryption story matter: a shared filesystem is a horizontal attack surface where one compromised node can read everything on the volume. EFS encryption covers both ends, at rest via KMS (AES-256, set at creation) and in transit via TLS on the NFS mount, but the two behave differently: at-rest is chosen when the file system is created and cannot be added later, while in-transit is opt-in per mount and easy to forget. The thing to hold onto: at-rest encryption is a create-time decision (remediation means recreate and migrate), in-transit TLS must be explicitly requested with the `-o tls` mount option and the Amazon EFS client, and encryption protects against disk-level and wire-level threats but not against a compromised OS user, which is where IAM mount policies, security groups, and POSIX permissions take over.
+
+## How it works
+
+- **At rest is KMS, chosen at creation.** Enabling encryption at file-system creation encrypts file content, metadata, and directory names with envelope encryption (a per-object data key wrapped by the `aws/elasticfilesystem` key or your CMK). It is transparent on access and cannot be turned on for an existing unencrypted file system.
+- **Remediation is recreate and migrate.** To encrypt existing unencrypted data you create a new encrypted file system and copy the data over (for example with AWS DataSync or a backup restore). There is no in-place toggle.
+- **In transit is TLS, opt-in per mount.** Encryption in transit uses TLS 1.2 between the client and the mount target, but only when you mount with `-o tls` using the Amazon EFS mount helper (`amazon-efs-utils`). A default `nfs4` mount without that flag moves data in plaintext across the VPC.
+- **Access is a three-part gate on top of encryption.** IAM controls mounting via `elasticfilesystem:ClientMount`/`ClientWrite`/`ClientRootAccess`, security groups restrict NFS (2049) to known sources, and POSIX permissions govern file-level access inside the mount. Encryption does not replace any of these.
+- **CMK adds control and auditing.** A customer-managed key gives you a scoped key policy, automatic rotation, and CloudTrail visibility into every decrypt, so you can see who read what and enforce `kms:Decrypt` per role. Denying a role on the CMK blocks reads even when NFS and IAM would allow the mount.
+
+## EFS encryption at rest vs in transit
+
+| Dimension | At rest | In transit |
+|---|---|---|
+| **When set** | File-system creation only | Per mount, at mount time |
+| **How** | KMS AES-256, envelope encryption | TLS 1.2 via `-o tls` + EFS mount helper |
+| **Default** | Off unless selected at creation | Off unless you add the flag |
+| **Remediation** | Recreate and migrate data | Remount with TLS |
+| **Protects against** | Disk theft, snapshot/copy exposure | Sniffing, MITM on the NFS stream |
+
+## What gets tested
+
+- **At-rest encryption cannot be added after creation.** If a scenario has an existing unencrypted EFS that now needs encryption, the answer is create a new encrypted file system and migrate, not "enable encryption on the file system."
+- **In-transit TLS is opt-in.** Protecting the NFS stream requires mounting with `-o tls` and the Amazon EFS client. Do not assume TLS is on by default, and a standard NFS mount is plaintext.
+- **IAM mount policies control who can mount.** Restricting mount access from other instances or a rogue container is `elasticfilesystem:ClientMount`/`ClientWrite` in IAM plus security groups, not encryption. Encryption stops disk and wire reads, IAM stops the mount.
+- **CMK for audit and scoped decrypt.** When the requirement is visibility into who decrypted or per-role key control, that is a customer-managed key with CloudTrail, over the default `aws/elasticfilesystem` key.
+- **Encryption does not stop a compromised OS user.** A root-level compromise on a mounting instance reads the decrypted files, so encryption is layered with POSIX permissions and least-privilege IAM, it is not sufficient alone.
+- **Security group scoping for NFS.** Limiting port 2049 to specific instance sources prevents arbitrary VPC hosts from mounting, complementing the IAM mount policy.
+
+## Limitations
+
+- No in-place at-rest encryption. Encrypting existing data means a new file system and a migration, with the cutover that implies.
+- In-transit encryption is not automatic and depends on the Amazon EFS mount helper plus the `-o tls` flag, so a plain NFS mount silently sends data in cleartext.
+- Encryption protects data on disk and on the wire, not from a compromised OS user on a mounting instance, who reads through the decrypted mount.
+- Because EFS is shared across many nodes, one weak instance with mount access can read the whole volume, so IAM mount scoping and security groups do more for blast radius than encryption does.
+- CMK-heavy, high-throughput read workloads generate many KMS operations, so key request costs scale with access volume even though encryption itself is free.
+- POSIX permissions still apply and are not overridden by encryption, so misconfigured file permissions expose data regardless of the encryption state.

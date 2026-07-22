@@ -1,231 +1,41 @@
 # EC2 Encryption
 
-## What Are We Talking About When We Say “EC2 Encryption”?
-
-When someone says “EC2 is encrypted,” they’re usually wrong.  
-
-**There is no single setting that encrypts “EC2.”**  
-What you’re actually encrypting is:
-
-- **EBS volumes** (your virtual hard drives)  
-- **Instance store volumes** (ephemeral SSD, not always available)  
-- **Snapshots** (**EBS** backups)  
-- **AMIs** (images created from encrypted volumes)  
-- **Traffic** in/out of the instance (handled by **TLS**, not EC2 itself)  
-- **Metadata and logs** (stored in **CloudWatch**, S3, etc.)
-
-> **CPU registers, RAM, and network buffers are NOT encrypted** — and encryption-in-use is a separate category altogether.
-
----
-
-## Cybersecurity Analogy
-
-Think of EC2 like a rental office space.
-
-- **EBS** encryption is **locking the filing cabinets** inside.  
-- **Network encryption** is **locking the door and encrypting your emails**.
-
-If you don’t encrypt your cabinets and someone breaks in or reuses the space after you, **they might find old contracts or invoices**.
-
-Encryption at rest protects your data **when disks are decommissioned, backed up, or snapshotted** — not while it’s running in memory.
-
-## Real-World Analogy
-
-**BlizzardTech** builds a batch data processing EC2 instance.  
-They launch it from an AMI that came from a third-party.  
-It stores intermediate results on a non-encrypted **EBS** volume.  
-When done, they terminate the instance — but **forget to delete the volume**.
-
-Six months later:
-
-- A junior **dev** restores the volume from a snapshot  
-- Notices some leftover logs containing user data  
-- Files a ticket asking if that’s sensitive  
-
-Turns out: it’s **GDPR-regulated customer data that was never encrypted.**
-
-No alert. No audit. No encryption. No compliance.
-
----
-
-## 1. EBS Volume Encryption
-
-This is the **main layer** of EC2 encryption.
-
-**EBS** volumes are **encrypted at rest using AWS KMS**:
-
-- You can use the default AWS-managed key (`aws/ebs`)  
-- Or a **customer-managed CMK** (`alias/blizzard-prod-ebs`)  
-- Encryption is **AES-256**, handled transparently by the EBS service
-
-**When encrypted:**
-
-- Data, snapshots, and backups are encrypted  
-- You can’t convert encrypted → unencrypted, or vice versa, without creating a copy  
-- Performance is not meaningfully impacted (hardware acceleration is used)
-
-**To encrypt:**
-
-- Check the box at volume creation  
-- Or copy an unencrypted snapshot to a new **encrypted** one  
-
-Use **IAM + KMS** key policies to control **who can create volumes using your CMKs**.
-
-## 2. Snapshot Encryption
-
-Snapshots inherit encryption from the volume.
-
-- If your volume was encrypted with `aws/ebs`, the snapshot will be too.  
-- If you copy a snapshot and specify a **different CMK**, it’ll use that.
-
-**Why this matters:**
-
-- Anyone with `ec2:CreateVolume` + access to your snapshot can spin up a new EC2 with that data  
-- **KMS key access is your last line of defense**
-
-**Best practice:**
-
-- Store snapshots in a **different account or separate encrypted bucket** (if exporting to S3)  
-- Monitor `ec2:CopySnapshot` in **CloudTrail**  
-- Disable **public snapshot sharing** (this can cause public leaks)
-
-## 3. AMI Encryption
-
-When you create an AMI from an encrypted **EBS** root volume:
-
-- The AMI will also be encrypted  
-- You must share both the AMI + **KMS** key if you want someone else to launch it
-
-> **You can’t share encrypted AMIs publicly**  
-> They must be shared to specific AWS account IDs  
-> **KMS** keys must also allow `kms:Decrypt` from those accounts
-
-This is how you enforce **multi-tenant isolation** when building secure image pipelines.
-
-## 4. Instance Store (Ephemeral) Disks
-
-Not all instance types support **instance store volumes** — but when they do, here’s the problem:
-
-These are **physically attached disks** (**NVMe**, **SSD**) that **disappear on termination**.  
-By default, they are **NOT encrypted unless your instance type supports it** (and it’s not consistent).
-
-**To enable encryption:**
-
-- You need **Nitro-based instances** (newer generations)  
-- You need to use the `nvme-cli` **inside the instance** to verify encryption  
-
-This is mostly useful when you need high-speed temp storage, not for persistent data.
-
-## 5. Encryption in Transit
-
-AWS does **not encrypt traffic between EC2 instances** by default.
-
-You must use:
-
-- **TLS 1.2+**  
-- **OpenVPN**, **WireGuard**, or **SSH tunneling**  
-- **mTLS**, especially in service mesh or **gRPC** environments  
-- **EFS with TLS**, **RDS with SSL** enabled, etc.
-
-**To enforce:**
-
-- Use **Security Groups** to block ports you don’t trust  
-- Use **PrivateLink** or **VPC Peering + SGs**  
-- Add **IAM Conditions** like `aws:SecureTransport = true` for API endpoints  
-- Use **CloudFront** or **ALB with HTTPS enforcement** in front of EC2 web services  
-
-## 6. KMS Key Management for EC2
-
-Most EC2 encryption relies on **AWS KMS**.
-
-**Common keys:**
-
-- `aws/ebs` *(default)*  
-- `alias/blizzard-prod-ebs` *(custom)*  
-- `alias/snapshot-kms-prod`
-
-You must manage:
-
-- **IAM** permissions (`kms:CreateGrant`, `kms:Decrypt`)  
-- Key rotation policies  
-- Alias naming conventions  
-- Monitoring via **CloudTrail**
-
-**Best Practice:**
-
-- Use **CMKs** for high-sensitivity data  
-- Rotate keys annually  
-- Attach key policies that limit usage by tag or principal  
-- Enable key usage logging  
-- Disable old keys after migration
-
-## 7. Logging and Monitoring
-
-You won’t get visibility into EC2 encryption **unless you ask for it.**
-
-**Tools:**
-
-- **CloudTrail** for **KMS** usage events (`CreateVolume`, `AttachVolume`, `CopySnapshot`)  
-- **AWS Config** to detect unencrypted volumes  
-- **Inspector** can flag unencrypted storage  
-- **Security Hub** surfaces **misconfigurations**  
-- **Trusted Advisor** warns on unencrypted **EBS** if using Business or Enterprise support
-
-**Custom Controls:**
-
-- Lambda auto-encrypt snapshots  
-- **SCPs** to deny unencrypted volume creation  
-- **EventBridge** rules for `ec2:CreateVolume` without encryption
-
----
-
-## Pricing Model (Encryption Overhead)
-
-| Component                  | Notes                                                  |
-|---------------------------|--------------------------------------------------------|
-| **EBS encryption**         | No extra charge                                        |
-| **KMS CMK usage**          | $1/month per **CMK** + $0.03 per 10K requests         |
-| **Snapshots**              | Charged per GB-month                                   |
-| **CloudTrail/KMS logging** | Charged by log ingestion                               |
-| **Inspector scans**        | Charged per resource scanned                           |
-
-> So yeah, encryption is mostly **cheap** — but key management isn’t free.
-
----
-
-## Snowy Real-World Use Case
-
-**Winterday’s** SOC receives an alert about a terminated EC2 instance from an older analytics workload.
-
-They investigate:
-
-- The volume was left behind (still live in `us-east-1a`)  
-- It was **unencrypted**  
-- A junior **dev** took a snapshot to preserve logs  
-- Then shared it with their personal AWS account to “keep a backup”  
-
-That’s a **compliance incident**, and could’ve been a **breach** if the **dev** was malicious.
-
-**Fixes:**
-
-- Add **SCP** to deny volume creation unless encryption enabled  
-- Enforce **CMK** usage per environment  
-- Block snapshot sharing unless explicitly whitelisted  
-- Build automation to check for unencrypted snapshots and notify
-
----
-
-## Final Thoughts
-
-Encryption on EC2 isn’t a toggle. It’s a mindset.
-
-You don’t get automatic safety unless you **explicitly ask for it**.  
-Encrypt your volumes.  
-Manage your **KMS** keys.  
-Audit your snapshots.  
-Block unencrypted activity by default.  
-Tag everything.
-
-And remember — if it’s not encrypted, it’s as good as public.
-
-> Don’t be the one explaining in your post-incident report that “we thought AWS encrypted that automatically.”
+There is no single "encrypt EC2" switch. What you actually encrypt is a set of distinct surfaces around the instance: EBS volumes (the main one), snapshots and AMIs derived from them, instance store (ephemeral) disks, and traffic in and out, plus whatever lands in CloudWatch and S3. CPU registers, RAM, and network buffers are not encrypted at rest, encryption-in-use is a separate category. The security point is that none of this is automatic beyond EBS defaults you turn on, so a forgotten unencrypted volume or a shared snapshot is how regulated data leaks. The thing to hold onto: EC2 encryption is a collection of per-surface controls (EBS at rest via KMS, snapshots and AMIs inheriting that key, instance store only on Nitro, and in-transit that you enforce yourself), and sharing an encrypted AMI or snapshot across accounts always requires granting the KMS key, not just the resource.
+
+## How it works
+
+- **EBS at rest is the core layer.** Volumes encrypt with AES-256 via KMS (`aws/ebs` or a CMK), transparently and without meaningful performance cost. You cannot flip an existing volume between encrypted and unencrypted, you snapshot, copy with the target encryption state, and restore.
+- **Snapshots inherit the volume's key.** A snapshot of an encrypted volume is encrypted, and copying a snapshot lets you re-target a different CMK. Anyone with `ec2:CreateVolume` and access to the snapshot can spin up an instance with that data, so KMS key access is the real last line of defense.
+- **AMIs carry encryption from the root volume.** An AMI built on an encrypted root volume is encrypted. You cannot share an encrypted AMI publicly, only to specific account IDs, and those accounts also need `kms:Decrypt` on the key. This is the mechanism behind secure, multi-tenant image pipelines.
+- **Instance store encryption depends on Nitro.** Ephemeral NVMe/SSD disks vanish on termination and are only encrypted on Nitro-based instances, where it is automatic at the hardware layer. They are for high-speed temp data, not persistent sensitive storage.
+- **In-transit is your responsibility.** AWS does not encrypt instance-to-instance traffic by default. You enforce TLS 1.2+, mTLS in a mesh, EFS-with-TLS, RDS-with-SSL, and put HTTPS-terminating ALB or CloudFront in front of web services, backed by security groups and `aws:SecureTransport` on API endpoints.
+- **Governance makes it non-optional.** SCPs can deny unencrypted volume creation, EventBridge can catch `ec2:CreateVolume` without encryption, Config flags unencrypted volumes and snapshots, and CloudTrail logs the KMS and EC2 calls. Default EBS encryption (per Region) closes the human-error gap for new volumes.
+
+## EC2 encryption surfaces
+
+| Surface | How it is encrypted | Key thing to know |
+|---|---|---|
+| **EBS volume** | KMS AES-256, at creation | No in-place toggle, snapshot-copy-restore |
+| **Snapshot** | Inherits volume key, re-key on copy | Access + `ec2:CreateVolume` reconstructs data |
+| **AMI** | Inherits root volume encryption | Share to account IDs only, plus `kms:Decrypt` |
+| **Instance store** | Automatic on Nitro only | Ephemeral, not for persistent sensitive data |
+| **In transit** | TLS/mTLS you configure | Not encrypted by default between instances |
+| **Governance** | SCP/Config/EventBridge | Deny-by-default beats per-volume checkboxes |
+
+## What gets tested
+
+- **"EC2 encryption" is really EBS plus derived resources.** The exam expects you to know there is no single instance-level encryption toggle, and that at-rest protection means EBS, snapshots, and AMIs.
+- **Sharing encrypted AMIs or snapshots cross-account.** The correct answer grants the target account use of the CMK in addition to sharing the resource, and encrypted images cannot be made public. `aws/ebs` cannot be shared, so this forces a CMK.
+- **No in-place encryption of an existing volume.** Remediation is snapshot to encrypted copy to new volume, then swap.
+- **Instance store on Nitro.** If a scenario needs encrypted ephemeral local storage, that is a Nitro instance type, automatic at the hardware layer, not a KMS toggle.
+- **In-transit is opt-in.** Instance-to-instance encryption requires you to configure TLS/mTLS. AWS does not provide it by default, unlike managed services that enforce TLS.
+- **Preventive governance.** Enforcing encryption fleet-wide is an SCP denying unencrypted volume creation plus default EBS encryption, not relying on people to check a box.
+
+## Limitations
+
+- Encryption at rest covers disks and their derivatives, not memory. RAM, CPU registers, and in-flight buffers are not protected, so a live-instance compromise reads decrypted data.
+- No in-place conversion between encrypted and unencrypted volumes, so remediation always creates new resources and requires a cutover.
+- Default EBS encryption is per Region and only affects new volumes, leaving existing volumes and other Regions untouched.
+- Instance store encryption is inconsistent across instance families and only guaranteed on Nitro, so it cannot be assumed as a portable control.
+- Cross-account sharing of encrypted AMIs and snapshots fails silently if the KMS key grant is missing, and encrypted images cannot be shared publicly at all.
+- In-transit encryption is entirely on you for raw EC2, so an environment that assumes AWS encrypts east-west traffic is exposed until TLS/mTLS is actually configured.

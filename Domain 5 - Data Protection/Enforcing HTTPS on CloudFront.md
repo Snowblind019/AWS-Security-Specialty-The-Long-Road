@@ -1,198 +1,40 @@
 # Enforcing HTTPS on Amazon CloudFront
 
-## What It Is
-
-CloudFront is AWS’s global CDN and edge distribution layer. When users hit your site — whether that’s a static app, dynamic API, or a signed download — CloudFront is the first thing they touch.
-
-And by default?
-
-- It accepts both HTTP and HTTPS traffic  
-- It allows you to choose what TLS version and cipher suites to support  
-- It can connect to origins over HTTP or HTTPS (not enforced unless configured)
-
-So unless you explicitly configure HTTPS-only at every layer, you might unknowingly be:
-
-- Accepting plaintext requests from clients  
-- Allowing downgrade attacks  
-- Connecting from **CloudFront → origin** without encryption
-
----
-
-## Cybersecurity Analogy
-
-Think of CloudFront like a **concierge for your cloud castle**.
-
-- **HTTPS** = verified guest with badge, secure radio, and voice authentication  
-- **HTTP** = someone yelling instructions across the courtyard hoping to be heard correctly
-
-> Without HTTPS enforcement, anyone can yell at your CDN and hope it relays the message — even if malicious.
-
-## Real-World Analogy
-
-Imagine your storefront takes orders by phone.
-
-- With **HTTPS**, every order is whispered securely over an encrypted phone line  
-- With **HTTP**, it’s shouted across a crowded room  
-
-You don’t just want *some* customers using secure lines — you want **all of them required to**.
-
----
-
-## Where and How HTTPS Can Be Enforced in CloudFront
-
-### 1. Viewer Protocol Policy (Client → CloudFront)
-
-This controls how users connect to CloudFront.
-
-| Option              | Description                                          |
-|---------------------|------------------------------------------------------|
-| Allow All           | Accepts both HTTP and HTTPS                         |
-| Redirect HTTP to HTTPS | Redirects all HTTP to HTTPS (recommended for websites) |
-| HTTPS Only          | Rejects all HTTP traffic (403) (recommended for APIs) |
-
-> This setting is per-cache behavior (per path/pattern), so you can enforce different rules per route.
-
----
-
-### 2. TLS Security Policy (TLS Version + Ciphers)
-
-This controls which TLS versions and cipher suites are allowed when clients use HTTPS.
-
-| TLS Policy Name     | TLS Min Version | Notes                       |
-|---------------------|------------------|------------------------------|
-| TLSv1.2_2021        | TLS 1.2          | Strongest recommended policy |
-| TLSv1.2_2019        | TLS 1.2          | Still solid, but less strict |
-| TLSv1.1_2016        | TLS 1.1          | Deprecated — avoid           |
-| TLSv1_2016          | TLS 1.0          | ❌ Legacy — do not use        |
-
-> For PCI DSS and modern compliance: use **TLSv1.2_2021** or later.
-
----
-
-### 3. Origin Protocol Policy (CloudFront → Origin)
-
-This controls how CloudFront communicates with your origin (e.g., S3, ALB, EC2).
-
-| Option          | Description                                  |
-|------------------|----------------------------------------------|
-| HTTP Only        | ❌ Insecure — avoid                          |
-| Match Viewer     | Mirrors the client's protocol               |
-| HTTPS Only       | ✅ Enforces secure communication to origin  |
-
-> If your origin (like S3) supports HTTP, CloudFront will happily use it unless you stop it.
-
----
-
-## How to Configure HTTPS Enforcement in CloudFront
-
-### Step-by-Step (for a Secure Setup)
-
-**Set Viewer Protocol Policy to Redirect HTTP to HTTPS or HTTPS Only**
-
-```yaml
-DefaultCacheBehavior:
-  ViewerProtocolPolicy: "redirect-to-https"
-```
-
-**Choose a Secure TLS Policy**
-
-```yaml
-ViewerCertificate:
-  SslSupportMethod: "sni-only"
-  MinimumProtocolVersion: "TLSv1.2_2021"
-```
-
-**Use an ACM Certificate**
-
-- Must be in `us-east-1` for CloudFront  
-- Attach to the distribution’s `ViewerCertificate`
-
-**Set Origin Protocol Policy to HTTPS Only**
-
-```yaml
-Origins:
-  - DomainName: "myapp.s3.amazonaws.com"
-    CustomOriginConfig:
-      OriginProtocolPolicy: "https-only"
-```
-
-> For **S3**, use **Origin Access Control (OAC)** + HTTPS origin  
-> For **ALB/EC2**, use valid cert on backend or terminate at ALB
-
----
-
-### Optional: Lambda@Edge Enforcement (For Signed URLs)
-
-If someone tries using HTTP in a signed URL, Lambda@Edge can deny it with a `403`:
-
-```js
-if (request.headers['cloudfront-forwarded-proto'][0].value !== 'https') {
-  return {
-    status: '403',
-    statusDescription: 'HTTPS Required',
-    body: 'Only HTTPS allowed.'
-  };
-}
-```
-
-> Use for ultra-strict security scenarios or signed URL enforcement
-
----
-
-## Common Pitfalls
-
-| Mistake                         | Why It’s Risky                                  |
-|----------------------------------|--------------------------------------------------|
-| Viewer Protocol = “Allow All”    | Allows plaintext HTTP → MITM and downgrade       |
-| Origin Protocol = “Match Viewer”| Can connect over HTTP if client does — insecure |
-| TLS policy too loose (TLSv1.0)  | Outdated, non-compliant                          |
-| No cert rotation                | May cause downtime or insecure fallback          |
-| Forgetting to update cache behaviors | Paths like `/api/*` may default to HTTP allowed |
-
----
-
-## Best Practices Summary
-
-| Control                  | Why It Matters                                      |
-|--------------------------|------------------------------------------------------|
-| Viewer Protocol: HTTPS Only / Redirect | Prevents plaintext access at the edge       |
-| TLS Policy: TLSv1.2_2021 or newer      | Enforces modern, strong encryption standards |
-| Origin Protocol: HTTPS Only            | Prevents CloudFront from using HTTP to origin|
-| Use ACM Certificates                   | Simplifies TLS at scale, auto-renews         |
-| Monitor TLS errors (CloudWatch, Logs)  | Catch failures or downgrade attempts         |
-| Use OAC for S3 origins                 | Prevents direct access, secures origin path  |
-
----
-
-## Real-Life Example (Snowy’s Static Site)
-
-Snowy’s static app is served via CloudFront:
-
-- **Viewer Protocol Policy**: Redirect HTTP to HTTPS  
-- **TLS Policy**: TLSv1.2_2021  
-- **ACM cert** for `www.snowysec.com`  
-- **S3 origin** behind **Origin Access Control (OAC)**  
-- **Origin Protocol Policy**: HTTPS Only  
-- **CloudWatch metrics** for TLS handshake failures  
-- **Lambda@Edge** for signed URL validation  
-
-**Result:**
-
-✔️ All client traffic is encrypted  
-✔️ No HTTP downgrade allowed  
-✔️ Edge-to-origin encryption enforced  
-✔️ Compliant with PCI DSS + best practices
-
----
-
-## Final Thoughts
-
-CloudFront is your **edge layer**, your **front door**, your **TLS terminator** — and if you don’t enforce HTTPS here, everything downstream loses integrity.
-
-- Encrypt the viewer connection  
-- Encrypt the origin connection  
-- Enforce TLS 1.2+  
-- Use ACM and secure policies  
-- Catch anything weird with CloudWatch + logs  
-
-> If you control CloudFront, you control the wire. Use that power wisely.
+CloudFront is AWS's global CDN and usually the first thing a client touches, which makes it the place to enforce TLS end to end. Left at defaults it is permissive: it accepts both HTTP and HTTPS from viewers, allows whatever TLS versions the chosen security policy permits, and can talk to the origin over plaintext HTTP unless told otherwise. Enforcing HTTPS is therefore a three-setting job at two hops, viewer-to-CloudFront and CloudFront-to-origin, plus the TLS policy that sets the floor. The thing to hold onto: the viewer protocol policy controls the client hop (redirect-to-HTTPS or HTTPS-only, and it is per cache behavior so `/api/*` can differ from `/`), the origin protocol policy controls the back hop, and both must be locked down or you have a plaintext segment even with a valid cert.
+
+## How it works
+
+- **Viewer protocol policy governs client to CloudFront.** Allow-all accepts HTTP, redirect-to-HTTPS bounces HTTP to HTTPS (typical for websites), and HTTPS-only rejects HTTP outright with a 403 (typical for APIs). It is set per cache behavior, so each path pattern can enforce its own rule, and a forgotten behavior is where plaintext slips in.
+- **TLS security policy sets the version and cipher floor.** Choosing a policy like TLSv1.2_2021 enforces TLS 1.2 minimum and modern ciphers, removing weak protocols and downgrade vectors. Older policies (TLSv1_2016) permit TLS 1.0 and are non-compliant for PCI DSS.
+- **Origin protocol policy governs CloudFront to origin.** HTTP-only is plaintext to the backend, match-viewer inherits whatever the client used (so a client on HTTP means HTTP to origin), and HTTPS-only forces encryption on the back hop. HTTPS-only is the secure choice.
+- **ACM cert for the viewer side, in `us-east-1`.** CloudFront reads its viewer certificate from `us-east-1` regardless of where the origin lives, attached via the distribution's viewer certificate with SNI. ACM auto-renews it.
+- **S3 origins use OAC plus the REST endpoint.** Origin Access Control locks the bucket so it is reachable only through CloudFront, and the S3 REST endpoint supports HTTPS to origin. Note the S3 static website endpoint only speaks HTTP, so if you need HTTPS on the back hop you must use the REST endpoint with OAC, not the website endpoint.
+- **Lambda@Edge for ultra-strict or signed-URL cases.** A viewer-request function can inspect `cloudfront-forwarded-proto` and 403 any non-HTTPS request, useful for enforcing HTTPS on signed URLs beyond the built-in policy.
+
+## The two hops and their controls
+
+| Hop | Control | Secure setting |
+|---|---|---|
+| **Viewer to CloudFront** | Viewer protocol policy (per behavior) | Redirect-to-HTTPS or HTTPS-only |
+| **TLS floor** | TLS security policy | TLSv1.2_2021 or newer |
+| **CloudFront to origin** | Origin protocol policy | HTTPS-only (not match-viewer) |
+| **Viewer cert** | ACM cert in `us-east-1` | SNI, auto-renewing ACM cert |
+| **S3 origin lock** | Origin Access Control | OAC + S3 REST endpoint (HTTPS) |
+
+## What gets tested
+
+- **Redirect-to-HTTPS vs HTTPS-only.** Websites usually redirect (so a user typing `http://` still lands securely), APIs usually reject with HTTPS-only. The viewer protocol policy is per cache behavior, so partial enforcement (only some paths) is a real misconfiguration.
+- **Origin protocol policy is the back-hop gap.** Encrypting only the viewer side leaves CloudFront-to-origin plaintext unless origin protocol is HTTPS-only. Match-viewer is a trap because a client on HTTP produces HTTP to origin.
+- **CloudFront cert must be in `us-east-1`.** A cert in any other Region will not attach to the distribution. This is a frequent distractor.
+- **TLS policy for compliance.** PCI DSS and modern baselines require TLS 1.2 minimum, so the answer is a TLSv1.2_2021-or-newer security policy, not a legacy one.
+- **OAC for S3 origins.** Locking the origin so it is only reachable via CloudFront is OAC (the successor to OAI), and the REST endpoint gives you HTTPS to origin while the website endpoint does not.
+- **Lambda@Edge for signed-URL HTTPS enforcement.** When the built-in policy is not enough (per-request protocol checks on signed URLs), a viewer-request Lambda@Edge does it.
+
+## Limitations
+
+- Enforcement is per cache behavior, so a single behavior left at allow-all reopens plaintext even if the default behavior is locked down.
+- Match-viewer origin policy silently allows HTTP to the origin whenever a client connects over HTTP, so it is not a safe "secure" setting.
+- The S3 static website endpoint cannot do HTTPS on the origin hop, so HTTPS-to-origin for S3 requires the REST endpoint with OAC.
+- The viewer certificate must live in `us-east-1`, which trips up teams whose origin and other certs are in another Region.
+- HTTPS enforcement protects the transport, not authorization or content. It does not stop an authenticated-but-malicious request, and it must pair with WAF, signed URLs/cookies, and origin access controls.
+- Redirect-to-HTTPS still exposes the initial HTTP request before the redirect, so the strictest APIs prefer HTTPS-only (reject) over redirect.

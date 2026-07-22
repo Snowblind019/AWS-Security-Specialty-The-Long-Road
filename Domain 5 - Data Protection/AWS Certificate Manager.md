@@ -1,130 +1,38 @@
 # AWS Certificate Manager (ACM)
 
-## What Is the Service
+ACM is AWS's managed service for provisioning, deploying, and renewing TLS/SSL certificates. It issues Amazon-signed public certificates trusted by browsers, hosts imported third-party certificates, and (through AWS Private CA) backs an internal PKI for service-to-service mTLS. The security win is operational: ACM auto-renews the certificates it issues so a cert never quietly expires on a Friday night and drops your HTTPS listener, and it keeps private keys non-exportable for ACM-issued public certs so the key material never leaves AWS. The thing to hold onto: ACM auto-renews only the certificates it issued (imported certs are your problem to rotate), CloudFront certs must live in `us-east-1`, and Private CA is the separate, paid path for internal trust and revocation.
 
-AWS Certificate Manager (ACM) is a fully managed service that handles the provisioning, deployment, and lifecycle management of TLS/SSL certificates for AWS services and your custom domains. It lets you secure network communications using HTTPS (or other TLS protocols) without needing to manually generate, upload, or renew certificates.
+## How it works
 
-ACM helps you:
+- **Public certificate issuance runs on domain validation.** You request a cert for a domain, then prove ownership by DNS (preferred, scriptable via Route 53) or email. Once validated, ACM issues an Amazon-signed cert and, as long as the DNS validation record stays in place, renews it automatically before expiry.
+- **Deployment is integration, not file-copying.** ACM public certs attach directly to ALB and NLB, CloudFront, API Gateway custom domains, and App Runner. You never handle a `.pem`. The private key for an ACM-issued public cert is non-exportable, so it cannot be lifted out and reused off-AWS.
+- **CloudFront has a region rule.** Any cert used on a CloudFront distribution, whether ACM-issued or imported, must be in `us-east-1`, because CloudFront is a global edge service that reads certs from that region. Regional services (ALB, API Gateway) use a cert in their own region.
+- **Imported certificates are supported but manual.** You can import a third-party cert into ACM and attach it to services, but ACM will not renew it. Expiry tracking and rotation are entirely on you, which is the main reason to prefer ACM-issued certs where possible.
+- **Private CA is the internal-trust arm.** AWS Private CA issues internal TLS certs for microservices, internal APIs, and IoT, with you controlling lifetimes, templates, and revocation via CRL/OCSP. This is the piece that enables internal mTLS and zero-trust service meshes, and unlike public ACM it is billed.
+- **Lifecycle events are observable.** Issuance, renewal, and expiry surface through EventBridge and CloudWatch, and API calls log to CloudTrail, so you can alarm on an approaching expiry (critical for imported certs) or audit who requested what.
 
-- Get public certificates trusted by browsers for your domain names (via Amazon-issued certs)  
-- Manage private certificates within your internal PKI (via ACM Private CA)  
-- Automatically renew certificates before they expire (huge operational win)  
-- Deploy certs easily to Elastic Load Balancers, CloudFront, API Gateway, and other AWS services  
+## ACM vs adjacent certificate paths
 
-ACM removes the overhead of messing with openssl, juggling .pem files, or forgetting to rotate certs before they expire. It's like your certificate butler — fetching, installing, and renewing them silently in the background.
+| Option | Renewal | Key exportable | Use it for |
+|---|---|---|---|
+| **ACM public cert** | Automatic (while DNS validation holds) | No | HTTPS on ALB/NLB, CloudFront, API Gateway |
+| **ACM imported cert** | Manual, you rotate it | Yes (you imported it) | A cert issued outside AWS you must use on AWS |
+| **AWS Private CA** | Automatic within the CA | Yes (internal certs) | Internal mTLS, service mesh, IoT, zero-trust |
+| **IAM server certs** | Manual, legacy | Yes | Only where a service predates ACM support |
 
----
+## What gets tested
 
-## Cybersecurity Analogy
+- **Auto-renewal boundary.** ACM auto-renews certs it issued via valid domain validation. Imported certs do not auto-renew, so if the scenario is a third-party cert expiring, the fix is a manual rotation process or moving to an ACM-issued cert, not "ACM handles it."
+- **CloudFront requires `us-east-1`.** A cert in any other region attached to CloudFront is the classic wrong config. Regional services use the cert in their region.
+- **DNS vs email validation.** DNS validation is automatable and the preferred answer for scale and unattended renewal. Email validation is fragile and manual.
+- **Public vs Private CA.** Browser-trusted, internet-facing endpoints use public ACM certs. Internal-only, mTLS, or zero-trust service-to-service traffic uses Private CA. Do not reach for a public cert on an internal mesh.
+- **Non-exportable keys.** ACM-issued public cert private keys cannot be exported. If a requirement is to run the same cert on a non-AWS server (Nginx on-prem), that points to Private CA or an imported cert, not a public ACM cert.
 
-Imagine you're guarding a secure facility. Every visitor must show a badge to prove their identity. If someone shows up with an expired badge, you deny them access. But imagine you're the one who has to manually issue new badges, track expiry dates, print them out, and stick them on shirts. That’s traditional TLS cert management.
+## Limitations
 
-With ACM, it’s like you have a robot at the front door who:
-
-- Issues badges  
-- Validates who they belong to  
-- Rotates badges before they expire  
-- And slaps them onto everyone walking in — automatically  
-
-It’s still secure, but far less manual. You’ve just outsourced badge maintenance.
-
-## Real-World Analogy
-
-Think of TLS certificates like driver’s licenses:
-
-- They prove who you are (identity verification)  
-- They're issued by a trusted authority (Certificate Authority)  
-- They expire after a certain period and need renewal  
-
-ACM is like the DMV for your domains — but without the lines, paperwork, or headaches. You click a button, and your website gets a valid, trusted license to talk over HTTPS.
-
----
-
-## How It Works
-### 1. Public Certificates
-
-- You request a cert for a domain (e.g., api.snowysec.com)  
-- ACM validates domain ownership via DNS or Email:  
-
-  - DNS validation is preferred (automatable)  
-- Once validated, ACM issues an Amazon-signed cert trusted by all major browsers  
-
-- You can attach it to:  
-  - Elastic Load Balancers (ALB/NLB)  
-  - CloudFront distributions  
-
-  - API Gateway custom domains  
-
-  - AWS App Runner / App Mesh  
-- ACM automatically renews the certificate as long as domain validation records remain  
-
-### 2. Private Certificates (ACM Private CA)
-
-- You create a private certificate authority (ACM PCA)  
-- Issue internal TLS certs for microservices, internal APIs, internal apps  
-- This is ideal for zero-trust, internal mTLS, or internal-only domains  
-- You manage policies, lifetimes, revocation — but ACM handles issuance and rotation  
-- You can integrate with services like Cloud Map, ECS, or IoT Core  
-
-### 3. Certificate Lifecycle Management
-
-ACM manages:
-
-- Issuance  
-- Renewal (automated)  
-- Deployment  
-- Expiry alerts (CloudWatch Events or CloudTrail)  
-- Revocation (for ACM Private CA only)  
-
-> ❗ ACM does not support importing certificates for CloudFront — only ACM certs in `us-east-1` can be used there.
-
----
-
-## Pricing Models
-
-| Feature                 | Pricing Notes                                                       |
-|-------------------------|----------------------------------------------------------------------|
-| Public ACM Certificates | Free — for use with AWS services (ALB, CloudFront, etc.)             |
-| ACM Private CA          | Charged monthly per CA and per certificate issued                    |
-| Imported Certificates   | Free to import and use; but no automatic renewal                     |
-| Wildcard Certs          | Free (for public) — e.g., *.snowysec.com                             |
-
-ACM Public certs are free as long as they're used within AWS — making it a great default for HTTPS on ELB/API Gateway.
-
----
-
-## Other Explanations (If Needed)
-
-**ACM vs. IAM Certificates**  
-- IAM supports importing server certs manually (legacy use)  
-- ACM is modern, managed, and preferred — especially for automation  
-
-**Why DNS Validation Wins**  
-- It’s automatic and scriptable via Route 53  
-- Avoids relying on flaky email-based validations (prone to spam filters, inbox issues)  
-
-**No Support for Exporting Public ACM Certs**  
-- You can’t download public ACM certs and use them outside AWS (e.g., in Nginx)  
-- Use ACM PCA for internal certs you want to export  
-
----
-
-## Real-Life Example
-
-Snowy is running a public-facing web app on CloudFront + ALB. To secure the connection:
-
-- He requests a cert in ACM for app.snowysec.com  
-- He validates via a Route 53 DNS record  
-- ACM issues the cert and attaches it to the ALB  
-- Snowy sleeps easy — ACM will renew and rotate that cert every year, automatically  
-
-Later, Snowy builds a microservice mesh in ECS with internal service-to-service encryption. He spins up an ACM Private CA, issues internal certs with short lifetimes, and enables mTLS between containers — all without ever seeing a `.pem` file again.
-
----
-
-## Final Thoughts
-
-ACM is an invisible workhorse. If you're not using it, you're probably doing certificate management the hard way — juggling files, forgetting expiry dates, and risking outages when a cert quietly expires on a Friday night.
-
-For any AWS-native stack — whether public APIs, internal apps, or IoT devices — ACM is a secure, scalable, and zero-maintenance way to handle TLS certs. When combined with ACM Private CA, it becomes a cornerstone of internal trust, zero-trust architecture, and automated mTLS — all with full logging, auditability, and minimal effort.
-
+- ACM does not auto-renew imported certificates. That rotation, and alerting on it, is yours to build.
+- Private keys for ACM-issued public certs are non-exportable, so you cannot reuse an ACM public cert on infrastructure outside AWS.
+- CloudFront only reads certs from `us-east-1`, which trips up multi-region deployments that forget to request or import the cert there.
+- Public ACM certs only deploy to integrated AWS services. They are not general-purpose certs you download and install on arbitrary servers.
+- AWS Private CA is billed per CA per month plus per issued certificate, so it is not the free default that public ACM certs are.
+- Certificate revocation applies to Private CA (via CRL/OCSP). Public ACM certs rely on renewal and short-lived trust rather than a customer-managed revocation workflow.

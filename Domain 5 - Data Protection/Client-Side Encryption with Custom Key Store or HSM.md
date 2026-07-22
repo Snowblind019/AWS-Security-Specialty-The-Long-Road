@@ -1,198 +1,39 @@
-# Client-Side Encryption with Custom Key Store or HSM
-
-## What Is It
-
-This encryption model is entirely outside of AWS’s hands. You generate your encryption keys in **CloudHSM**, an on-prem **Hardware Security Module**, or a third-party KMS like **HashiCorp Vault**, **Thales**, **Fortanix**, or even a government-mandated crypto appliance — then **encrypt your data locally** before ever sending it to AWS.
-
-- AWS does **not** see the key  
-- AWS does **not** see the plaintext  
-- No KMS, no SSE, no IAM control over encryption/decryption  
-- All key management, encryption, rotation, logging — **it’s all you**  
-
-This pattern is common in industries with strict data sovereignty or external compliance mandates (e.g., financial institutions, health care, government, military, etc.).
-
-> If symmetric KMS is a middle ground, this is the **zero-trust extreme**.
-
----
-
-## Cybersecurity Analogy
-
-Think of it like this:
-
-**Snowy** is storing sensitive government research notes. The compliance office says:
-
-> “Nobody but you can touch the key — not AWS, not a cloud admin, not even by accident.”
-
-So Snowy:
-
-- Uses an HSM in a locked basement  
-- Creates a key pair inside that HSM  
-- Encrypts her notes locally using that key  
-- Uploads only the ciphertext to S3  
-
-If a rogue cloud admin, a misconfigured KMS, or a nation-state attacker tries to read it — they can’t.
-
-> **AWS has no logs, no decryption path, no ability to help. And that’s by design.**
-
-## Real-World Analogy
-
-Imagine you're dropping off a briefcase in a bank’s safety deposit box.
-
-But this time, you bring your **own custom-built biometric lock**, manufactured in your basement, powered by a battery only **you** know how to recharge.
-
-The bank (AWS) stores your locked briefcase, but they:
-
-- Can’t open it  
-- Don’t know what locking mechanism you used  
-- Don’t even know what’s inside  
-- Can’t help if you forget your password  
-
-> This is **maximum control, maximum responsibility**.
-
----
-
-## How It Works
-
-Here’s the typical encryption pipeline in this model:
-
-1. **Generate the encryption key** in:
-   - AWS **CloudHSM** cluster  
-   - On-premise HSM  
-   - External KMS/Vault (e.g., HashiCorp, CyberArk, Fortanix)  
-
-2. **Encrypt your data locally** with that key using:
-   - Your own crypto libraries  
-   - AES-256-GCM or XTS  
-
-3. **Upload encrypted blob** to S3 (or any AWS storage):
-   - S3 doesn’t know it’s encrypted — it’s just binary data  
-   - You can store encrypted metadata alongside if needed  
-
-4. **Decryption happens off-AWS**, using your own systems:
-   - Data is useless without your key infrastructure  
-   - No AWS APIs involved in decryption  
-
----
-
-## Integration Patterns
-
-| System               | Purpose                                                |
-|----------------------|--------------------------------------------------------|
-| **CloudHSM**         | AWS-native HSM cluster you control                     |
-
-| **External HSM**     | Physical device on-prem or colocation                  |
-| **XKS**              | External Key Store — lets AWS KMS call out to your key store for decryption (used with SSE-KMS) |
-
-| **AWS Encryption SDK** | Encrypts/decrypts locally using your chosen master key (KMS, HSM, etc.) |
-| **HashiCorp Vault**  | Popular in zero-trust/DevSecOps pipelines              |
-
-| **Thales CipherTrust** | Common in federal and high-assurance contexts       |
-
----
-
-## Why It’s Used
-
-| Use Case                      | Why It Fits                                               |
-|-------------------------------|------------------------------------------------------------|
-| Government classified workloads | Full key ownership required                             |
-| Cross-border regulatory controls | Data must be encrypted before touching any foreign infra |
-| Banks with crypto policy mandates | Keys must live in private cloud HSMs only             |
-| Zero-trust or air-gapped systems | No external entity can be trusted with decryption       |
-| BYOK with no trust in KMS        | Some orgs won't accept cloud-native encryption at all   |
-
----
-
-## Security Trade-Offs
-
-| Security Property     | Value                                                                 |
-|------------------------|----------------------------------------------------------------------|
-| ✔ Max control          | You own the full key lifecycle — generate, store, revoke             |
-| ✔ Zero trust           | No AWS involvement; not even a chance for AWS to decrypt             |
-| ✖ Zero visibility      | No CloudTrail logs for encryption/decryption                         |
-| ✖ No native IAM controls | Can't restrict access using KMS condition keys                   |
-| ✖ Manual rotation      | You must rotate and re-encrypt objects yourself                      |
-| ✖ No policy enforcement | No S3 bucket policy support for external keys                     |
-| ✖ No automatic backup  | If your HSM dies, so does your key — and your data                   |
-
-> You gain **maximum assurance** — but you trade away all the “guardrails” AWS usually gives you.
-
----
-
-## AWS Encryption SDK + External Keys
-
-The **AWS Encryption SDK** helps bridge this complexity.
-
-It can:
-
-- Do envelope encryption with custom master keys  
-- Encrypt/decrypt in your app with structured metadata  
-- Support multi-master (e.g., HSM + backup KMS)  
-- Rotate DEKs securely  
-
-You still need to:
-
-- Write integration logic with your vault  
-- Manage availability of your HSM/KMS  
-- Secure local runtime handling of DEKs  
-
-But it helps **standardize** envelope encryption, metadata, and key wrapping formats.
-
----
-
-## Comparison with Client-Side KMS CMK
-
-| Feature                   | Client-Side KMS CMK     | Client-Side Custom HSM/KMS          |
-|---------------------------|--------------------------|--------------------------------------|
-| Key Source                | AWS KMS                  | CloudHSM, on-prem HSM, Vault         |
-| Who Holds Key             | AWS (via CMK access)     | Customer only                        |
-| Key Rotation              | Automatic via KMS        | Manual (unless scripted)             |
-| CloudTrail Logging        | Yes (GenerateDataKey, Decrypt) | No (unless Vault/HSM logs it)  |
-| IAM Condition Controls    | Yes                      | No                                   |
-| S3 Bucket Policy Integration | No (client-side)     | No                                   |
-| Compliance Scope          | Moderate–High            | Maximum (gov, defense, etc.)         |
-| Complexity                | Medium                   | Very High                            |
-
----
-
-## Real-Life Snowy Scenario
-
-**Snowy** is working on a multi-national fintech platform that must comply with **European Schrems II** restrictions.
-
-The legal team says:
-
-> “We don’t trust any US cloud provider with unencrypted data or key custody.”
-
-So Snowy:
-
-- Deploys a CloudHSM cluster in **Frankfurt**  
-- Connects encryption microservices to use CloudHSM APIs via **PKCS#11**  
-- Writes a Go service to encrypt blobs with **AES-GCM** using HSM-backed keys  
-- Uploads encrypted blobs to S3 in `eu-central-1`  
-- Keys never leave the HSM; data is never readable outside their secure enclave  
-
-✔ GDPR compliant  
-✔ Crypto segregation  
-✔ Cloud-native storage — all with **zero AWS key involvement**
-
----
-
-## Final Thoughts
-
-Client-side encryption with a **custom key store or HSM** is **not for the faint of heart** — but it’s the right choice when:
-
-✔ You require external crypto trust boundaries  
-✔ You must own your key lifecycle completely  
-✔ Compliance dictates total cloud-provider isolation  
-
-> It is powerful, opaque, and dangerous if mishandled.
-
-If:
-
-- **SSE-S3** is using a lock AWS built for you, and  
-- **SSE-KMS** is asking AWS to use your lock, and  
-- **Client-Side KMS** is AWS handing you the lock and letting you use it —  
-
-Then **this model** is:
-
-> **You forging your own lock, building your own vault, and trusting only yourself with the key.**
-
+# Client-Side Encryption with a Custom Key Store or HSM
+
+This is the zero-trust extreme of data protection: you generate keys in hardware you control (CloudHSM, an on-prem HSM, or a third-party key manager like HashiCorp Vault, Thales, or Fortanix), encrypt the data locally in your own application before it ever leaves your environment, and upload only ciphertext to AWS. AWS never sees the key or the plaintext, there is no SSE, no KMS in the decrypt path, and no IAM condition keys governing the crypto. Everything (generation, storage, rotation, logging, availability) is on you. The thing to hold onto: this is client-side encryption where the key custody lives entirely outside AWS's reach, which is distinct from XKS (a server-side SSE-KMS pattern where KMS calls out to your external key store), and the trade you are making is maximum assurance for the total loss of AWS's guardrails, logging, and recovery.
+
+## How it works
+
+- **Key generation happens in your custody.** A CloudHSM cluster, an on-prem or colocated HSM, or an external KMS/Vault produces and holds the key material. AWS has no handle on it.
+- **Encryption happens in your application, before upload.** Your code (often via the AWS Encryption SDK or your own crypto libraries) performs envelope encryption with AES-256-GCM or similar, wrapping data keys under your HSM-held master key.
+- **Only ciphertext lands in AWS.** S3 or any AWS store receives an opaque binary blob. It cannot tell the object is encrypted, applies no SSE, and holds no key. You can store wrapped-key metadata alongside the object for later decryption.
+- **Decryption happens off the AWS control plane.** Your systems fetch the ciphertext, unwrap the data key using your HSM/Vault, and decrypt locally. No AWS API participates, so a compromised AWS credential or a rogue cloud admin cannot read the data.
+- **The AWS Encryption SDK standardizes the envelope.** It handles multi-master keyrings (for example an HSM primary plus a backup), structured ciphertext metadata, and DEK wrapping formats, so you are not inventing a serialization scheme. You still write the integration to your Vault/HSM and secure DEK handling in memory.
+- **This is not XKS.** XKS (KMS External Key Store) is a server-side model: SSE-KMS keeps working but KMS reaches out to an external key store you host for the wrap/unwrap. That still routes through KMS and produces CloudTrail records. The pattern in this module keeps AWS out of the crypto path entirely.
+
+## Where this sits vs the other encryption models
+
+| Model | Who holds the key | Who does the crypto | AWS in the path |
+|---|---|---|---|
+| **SSE-S3** | AWS | AWS (server-side) | Fully |
+| **SSE-KMS** | AWS KMS (your CMK) | AWS (server-side) | Fully, CloudTrail-logged |
+| **XKS (external key store)** | You, outside AWS | AWS server-side, KMS calls your store | KMS orchestrates, logged |
+| **Client-side KMS CMK** | AWS KMS | Your app (client-side) | KMS for the data key only |
+| **Client-side custom HSM/Vault** | You only | Your app (client-side) | None |
+
+## What gets tested
+
+- **Client-side custom HSM vs client-side KMS CMK.** If the requirement is that AWS must have zero access to keys and zero decrypt path, that is the custom HSM/Vault model. If AWS holding the CMK (with CloudTrail and IAM conditions) is acceptable, client-side KMS is simpler and preferred.
+- **This model vs XKS.** "Keys outside AWS but I still want SSE-KMS and CloudTrail logging" is XKS. "AWS is out of the crypto path completely, I encrypt in my app" is client-side custom HSM. Do not conflate them.
+- **Sovereignty and Schrems II style mandates.** Requirements that the provider cannot access data or keys, cross-border restrictions, or air-gapped trust boundaries push to this model.
+- **The cost of leaving AWS's guardrails.** Choosing this model means accepting no CloudTrail on the crypto, no IAM condition-key enforcement, manual rotation and re-encryption, and no AWS recovery if the key is lost.
+- **S3 bucket policies cannot enforce it.** Because encryption is client-side and the key is external, you cannot write an S3 policy that requires or validates this encryption the way you can with SSE-KMS.
+
+## Limitations
+
+- No CloudTrail visibility into encryption or decryption. Your only crypto audit trail is whatever your HSM or Vault logs itself.
+- No IAM or KMS condition-key controls over the keys, and no S3 bucket-policy enforcement of the encryption, because AWS never sees the key.
+- Manual rotation. Rotating a key means re-encrypting objects yourself, there is no managed rotation.
+- No AWS backup or recovery. If your HSM dies or the key is lost, the data is unrecoverable and AWS cannot help by design.
+- High complexity and operational burden. You own key availability, DEK handling in runtime memory, integration code, and disaster recovery for the key infrastructure.
+- Easy to conflate with XKS, which is a different, server-side pattern. Choosing the wrong one gives you either more AWS involvement than a sovereignty mandate allows, or more operational burden than you needed.

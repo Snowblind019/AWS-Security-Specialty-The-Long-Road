@@ -1,166 +1,39 @@
 # Encryption for Data at Rest
 
-## What Is It 
+Data at rest is anything sitting on persistent media: EBS volumes, S3 objects, RDS and DynamoDB storage, SSM parameters, logs, snapshots, and exports. Encryption at rest protects it against the threats that do not involve the network, physical disk theft, a rogue admin browsing stored files, exposed backups or snapshots, and lateral movement after an intrusion. Across AWS the pattern is the same: AES-256 with KMS handling key creation, rotation, policy, and audit, applied transparently on write and read. The thing to hold onto: encryption at rest converts "who can reach the data" into "who can use the key," so the KMS key policy becomes a second authorization gate on top of IAM, and choosing a customer-managed key (over an AWS-managed or AWS-owned key) is what buys you scoped access, CloudTrail visibility, and cross-account control.
 
-Data at rest refers to any data stored on persistent media — whether on an EBS volume, in an S3 bucket, in RDS databases, DynamoDB tables, or SSM parameters.  
-When data is not moving across the network, it’s at rest. And it must be protected.
+## How it works
 
-Encryption at rest protects this data from:
+- **KMS is the backbone.** Nearly every service encrypts at rest with a KMS key: an AWS-owned key (invisible, no control), an AWS-managed service key (`aws/s3`, `aws/ebs`, etc., logged but no custom policy), or a customer-managed CMK (scoped policy, rotation, cross-account, full CloudTrail). The tier you pick determines your control and auditability.
+- **Envelope encryption keeps it fast.** KMS issues a data key, the service encrypts the data locally with it, stores the wrapped data key beside the data, and calls KMS only to unwrap on read. This is why bulk data does not stream through KMS and why per-object keys scale.
+- **The key policy is a distinct authorization layer.** IAM says who can call the service action, the KMS key policy says who can decrypt. Denying a role on the CMK blocks reads even when IAM allows the action, which is how you stop a compromised role or Lambda from reading a snapshot or object.
+- **S3 has three server-side modes.** SSE-S3 (AWS-managed keys, simplest), SSE-KMS (your CMK, auditable and policy-controlled), and SSE-C (you supply the raw key per request, niche and operationally heavy). Bucket policies can require encryption on upload via the `x-amz-server-side-encryption` header or `aws:SecureTransport`.
+- **Some services encrypt at creation only.** RDS and Aurora set encryption at creation and cannot toggle it later (snapshot-copy-restore to remediate), DynamoDB is always encrypted, and EBS supports default encryption per Region for new volumes. Knowing which are create-time is exam-relevant.
+- **Governance enforces it fleet-wide.** Default encryption settings, SCPs denying unencrypted resource creation, Config rules detecting unencrypted resources, and Security Hub findings turn "should be encrypted" into "cannot be created unencrypted."
 
-- Physical theft (e.g., someone steals a hard drive from a data center)  
-- Insider access (e.g., a rogue admin browsing stored files)  
-- Compromise of backups, snapshots, or database exports  
-- Lateral movement after initial intrusion  
-- Accidental exposure (e.g., public S3 buckets with sensitive files)
+## Key management tiers
 
-AWS makes this easy, but understanding how it works and where it applies is essential for building secure architectures.
+| Tier | Control | CloudTrail visibility | Cross-account |
+|---|---|---|---|
+| **AWS-owned** | None | No | No |
+| **AWS-managed (`aws/service`)** | Service-scoped, no custom policy | Yes | Limited |
+| **Customer-managed (CMK)** | Full key policy, rotation, grants | Yes | Yes |
+| **SSE-C (S3 only)** | You hold the raw key | Limited | You manage entirely |
 
----
+## What gets tested
 
-## Cybersecurity Analogy
+- **CMK is the answer for control and audit.** Scoped decrypt access, "who decrypted what and when," cross-account, and most compliance mandates require a customer-managed key. AWS-owned and AWS-managed keys cannot be policy-scoped or shared the same way.
+- **The key policy blocks reads independent of IAM.** A common correct answer to "stop a compromised role from reading encrypted data" is denying that principal on the KMS key, not only tightening IAM.
+- **Enforce encryption on upload with S3 policies.** Requiring `x-amz-server-side-encryption` (or a specific SSE-KMS key) via bucket policy is how you guarantee objects land encrypted, since default encryption alone can be overridden by a request specifying otherwise.
+- **Create-time encryption services.** RDS and Aurora cannot be encrypted in place, so remediation is snapshot-copy-restore. DynamoDB is always encrypted (choose the key tier), and EBS default encryption is per Region for new volumes.
+- **Grants to roles, not users.** Least-privilege key access uses KMS grants or key-policy statements scoped to specific service roles, not broad principals, to enforce separation of duties.
+- **Encryption vs access.** Encryption protects confidentiality of stored bytes, it does not authorize access. A public bucket of encrypted objects is still safe from reading without the key, but IAM and bucket policy still govern who can call GET.
 
-Imagine your company’s documents are stored in a warehouse.  
-Even if someone breaks in, every single box is locked with its own key. And those keys are in a secure vault.
+## Limitations
 
-Even if a thief walks off with a few boxes, unless they also stole the vault and knew how to open it — the documents are worthless.
-
-That’s data at rest encryption.
-
-## Real-World Analogy
-
-Think of a lost USB stick. If it’s encrypted:
-
-- You lose the device, but not the data  
-- No one can open it without the password/key  
-- Even if they clone the storage, it’s gibberish
-
-In the cloud, we don’t worry about misplaced USBs — but we do worry about snapshots, logs, EBS volumes, and exports being accessed improperly.  
-**Encryption neutralizes that risk.**
-
----
-
-## How It Works in AWS
-
-All AWS storage services offer encryption-at-rest using **AES-256 encryption**.  
-Most use the **AWS Key Management Service (KMS)** for key creation, rotation, and access control.
-
-AWS gives you three key management options:
-
-| Key Type                      | Who Manages It         | Use Case                                      |
-|------------------------------|------------------------|-----------------------------------------------|
-| SSE-S3 / AWS-Managed         | AWS fully manages keys | Easy default encryption with minimal config   |
-| SSE-KMS / Customer Managed   | You manage in KMS      | Fine-grained control, auditing, grants        |
-
-| SSE-C (Customer-provided)    | You bring raw key      | Least used — high-risk, niche use cases       |
-
-When enabled, encryption happens automatically *before* write, and decryption occurs on *read* — transparently to your application.  
-
-No need to modify your code, unless you want to specify CMKs explicitly.
-
----
-
-## Encryption at Rest by Service
-
-| Service        | Encryption Support                        | KMS Integration |
-|----------------|--------------------------------------------|------------------|
-| S3             | SSE-S3, SSE-KMS, SSE-C                    | Yes              |
-| EBS            | Yes (default on or opt-in)                | Yes              |
-| RDS            | Yes (at cluster creation only)            | Yes              |
-| DynamoDB       | Always encrypted at rest (SSE enabled)    | Yes              |
-| SQS            | Optional SSE for message bodies           | Yes              |
-| S3 Glacier     | Always encrypted                          | Yes              |
-| EFS            | Supports encryption at rest + in transit  | Yes              |
-| Lambda Env Vars| Optional encryption                       | Yes              |
-| SSM Parameters | SecureString types use KMS                | Yes              |
-
----
-
-## SnowySec Encryption Flow Example
-
-**Snowy’s application stores user uploads in S3, logs in CloudWatch, and backups in RDS snapshots.**
-
-To enforce airtight encryption-at-rest posture:
-
-- Enable S3 bucket default encryption using CMK: `snowy-prod-data-key`
-- Apply bucket policy that denies `PutObject` unless `x-amz-server-side-encryption` is set
-- Use EBS volume encryption by default on all AMIs with the same CMK
-- Encrypt RDS instances at creation and tag snapshots with `Confidential=true`
-- Configure CloudWatch Logs with KMS key for log group encryption
-- Rotate all KMS CMKs every 12 months automatically
-- Monitor key usage via CloudTrail + CloudWatch Alarms
-- Set up grants so only specific IAM roles (not users) can use encryption keys
-- Audit access with KMS key usage logs + query with Athena
-
-**Result:**  
-Even if a compromised Lambda accesses a snapshot or S3 object, it won’t have key permissions — and the data stays safe.
-
----
-
-## Security Use Cases
-
-| Threat                                 | Encryption Mitigation                                        |
-|----------------------------------------|--------------------------------------------------------------|
-| Stolen snapshot from RDS/S3/EBS        | Encrypted object is unreadable without key access           |
-| Insider with EC2 access mounts EBS     | IAM policy blocks decryption without correct key grants     |
-| Exfiltration of data via Lambda        | CMK access policy limits use to specific services/roles     |
-| Backup files publicly exposed          | Data is encrypted; attacker cannot read the files           |
-| Compromised CloudTrail logs            | Encrypted logs unreadable without key access                |
-
----
-
-## Security Best Practices
-
-- Use customer-managed KMS keys for sensitive data (logs, backups, app storage)  
-- Rotate CMKs regularly (AWS auto-rotation or manually)  
-- Use resource-based policies + grants to tightly control access  
-- Enable encryption by default in service settings (EBS, S3, etc.)  
-- Audit key usage in CloudTrail — look for anomalous decryption attempts  
-- Tag sensitive keys for easy inventory and cost tracking  
-- Don’t share CMKs across unrelated workloads — enforce separation of duties  
-
----
-
-## Integration with Other Services
-
-| Service        | Why It Matters for Encryption                          |
-|----------------|---------------------------------------------------------|
-| KMS            | Key creation, rotation, policy, usage logs             |
-| CloudTrail     | Logs every encryption/decryption attempt for auditing  |
-| Config         | Can track whether encryption is enabled per resource   |
-| Security Hub   | Flags misconfigured encryption settings                |
-| S3 Policies    | Can enforce mandatory encryption headers               |
-| IAM            | Controls which roles can access/decrypt keys           |
-| CloudWatch     | Alarm on abnormal KMS activity or access patterns      |
-
----
-
-## Pricing Overview
-
-| Item                        | Pricing                                      |
-|-----------------------------|----------------------------------------------|
-| KMS API calls (Encrypt/Decrypt) | ~$0.03 per 10,000 requests (as of 2025)     |
-| KMS CMK storage                 | ~$1.00/month per key                        |
-| S3 default encryption          | Free (SSE-S3), KMS usage applies if SSE-KMS |
-| EBS, RDS, DynamoDB encryption  | No extra charge (unless KMS usage is high)  |
-
----
-
-## Final Thoughts
-
-Encryption at rest is invisible when done right — but *indispensable* when something goes wrong.
-
-If an attacker dumps your database, grabs your logs, or copies your backups…  
-**The encryption key is the lock they’ll never have.**
-
-SnowySec doesn’t just store data — it safeguards it.
-
-From the logs in S3, to the secrets in SSM, to the audit trails in CloudTrail —  
-Every byte is wrapped in AES-256 and protected with policies that say:
-
-> “Unless you are who you say you are… this data is just noise.”
-
-**Data at rest encryption is the seatbelt of cloud security.**  
-- It’s not exciting.  
-- It’s not flashy.  
-- But one day, it will save you.
-
+- Encryption at rest does nothing for data in transit or in use. It protects stored bytes only, so TLS and in-memory protections are separate concerns.
+- It does not stop an authorized principal who holds both the IAM permission and key access. A compromised role with `kms:Decrypt` reads the data, so key-policy scoping and monitoring are essential.
+- Several services encrypt only at creation (RDS, Aurora), so remediation means recreating resources rather than flipping a setting.
+- AWS-owned and AWS-managed keys cannot be scoped with custom policies or shared cross-account, so those requirements force CMKs and the key management that comes with them.
+- SSE-C puts the entire burden of key custody, availability, and rotation on you, with no KMS safety net, which is why it is rarely the right choice.
+- Heavy KMS request volume and many CMKs carry real cost, so per-workload key separation must be balanced against the per-key and per-request bill.
