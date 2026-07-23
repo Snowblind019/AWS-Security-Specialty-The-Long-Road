@@ -1,167 +1,64 @@
 # AWS Firewall Manager
 
-## What Is AWS Firewall Manager
+AWS Firewall Manager centrally defines protection policies and pushes them across every account, Region, and VPC in an organization, then keeps them applied. It creates and owns the underlying resources, so a Web ACL, a Network Firewall endpoint, a DNS Firewall rule group association, or a replicated security group exists because a policy says it must, and reappears if someone deletes it. The security problem it solves is coverage rather than capability: WAF, Shield Advanced, Network Firewall, and DNS Firewall are all perfectly good on their own, and all of them are useless on the one load balancer a team stood up last week in an account nobody is watching. Firewall Manager makes protection a property of the organization scope and the resource tag rather than of an engineer's memory, and it applies automatically to accounts and resources created after the policy was written. The thing to hold onto: Config tells you a resource is unprotected, Firewall Manager makes it protected and keeps it that way.
 
-AWS Firewall Manager is a **centralized security policy enforcement tool** that lets you define firewall rules and enforce them across multiple **AWS accounts**, **Regions**, and **VPCs** — all from one place.
+## How it works
 
-At its core, Firewall Manager is about **scaling security controls**. It allows cloud security teams to:
+**Three prerequisites, all commonly tested.** AWS Organizations with all features enabled, AWS Config enabled in every account and Region in scope, and a designated Firewall Manager administrator account registered from the management account. Config is not optional: Firewall Manager depends on it to discover and evaluate resources, so a policy showing no in-scope resources usually means Config is off somewhere.
 
-- Automatically apply **WAF rules**, **VPC security groups**, **Shield Advanced protections**, and **Route 53 resolver rules**  
-- Ensure that **new accounts and new resources** get protected automatically  
-- Enforce **non-deletable rules** or **mandatory protections** across distributed architectures  
+**Administration is delegated and can be partitioned.** The recommended pattern is a dedicated security tooling account rather than the management account. Multiple administrators are supported, each given an administrative scope limited to specific accounts, OUs, Regions, or policy types, which lets a network team own Network Firewall while an application security team owns WAF.
 
-> If you're running a multi-account AWS Organization and want no surprises in how resources are secured — Firewall Manager is your **policy enforcer**.
+**Policy scope is expressed three ways.** By organizational unit or explicit account include and exclude lists, by resource type, and by resource tags including exclusion tags. This combination is what allows "all ALBs in the Prod OU except those tagged for a known exception" to be a single policy.
 
----
+**Policy types cover distinct protections.**
 
-## Cybersecurity Analogy
+- **AWS WAF.** Associates a managed Web ACL with ALBs, API Gateway stages, CloudFront distributions, AppSync, Cognito user pools, and App Runner. Policies define first and last rule groups, leaving a middle section accounts may populate with their own rules, and can retrofit existing Web ACLs rather than replacing them.
+- **Shield Advanced.** Enrolls in-scope resources into Shield Advanced protection organization-wide, which is otherwise a per-resource action nobody performs consistently.
+- **Security group policies, in three distinct forms.** A common security group policy replicates a primary group into member accounts and associates it with in-scope resources. A content audit policy evaluates existing rules against allowed or denied rule sets, or against FMS managed audit rule groups, and flags or removes violations such as unrestricted access on 22 or 3389. A usage audit policy finds unused and redundant security groups and can delete them.
+- **AWS Network Firewall.** Deploys firewall endpoints and rule groups, in a distributed model with endpoints per VPC, a centralized model routing through an inspection VPC, or by importing existing firewalls.
+- **Route 53 Resolver DNS Firewall.** Associates rule groups with VPCs to block command and control domains, domain generation algorithm patterns, and other threat intelligence lists.
+- **Network ACL policies.** Manage and enforce network ACL entries across accounts.
+- **Third-party firewalls.** Palo Alto Cloud NGFW and Fortigate CNF deployed through the same policy mechanism.
 
-Imagine **SnowySec** has offices in **30 different cities**. Every office manages its own building, but **Snowy** — the head of security — wants every building to:
+**Remediation is a per-policy switch.** Automatic remediation makes Firewall Manager create, associate, and restore protections, and revert non-compliant changes. Without it the policy is monitor only and produces compliance findings but changes nothing. Expect scenarios that hinge on which mode was chosen.
 
-- Have cameras  
-- Use biometric access  
-- Disable all guest Wi-Fi  
+**Drift is self-healing when remediation is on.** Deleting a Firewall Manager managed Web ACL or detaching it causes Firewall Manager to restore the association on its next evaluation. Resource cleanup, if enabled, removes protections from resources that fall out of scope.
 
-If Snowy had to fly to each office and configure this manually — **chaos**.  
-Instead, he writes a **standard security policy** and distributes it through a **remote compliance system**. Each office applies it automatically — and new buildings also inherit the policy when opened.
+**Findings integrate outward.** Compliance status is available in the Firewall Manager dashboard, can be published to AWS Security Hub, and can drive SNS notifications and EventBridge automation.
 
-> That system? **AWS Firewall Manager**.
+**Region behavior matters.** Policies are created per Region and evaluate resources in that Region. Global resources, meaning CloudFront distributions and Shield Advanced protections for global accelerators and CloudFront, are managed from us-east-1.
 
-## Real-World Analogy
+## Comparison
 
-Think of Firewall Manager like **Group Policy (GPO)** in Active Directory:
+| Service | Role | Deploys protections | Auto-covers new accounts and resources | Scope |
+| --- | --- | --- | --- | --- |
+| AWS Firewall Manager | Central enforcement of network and edge protections | Yes, creates and restores them | Yes | Organization, by OU, tag, resource type |
+| AWS Config | Detects non-compliant configuration, can remediate via SSM | No, evaluates only | Yes, if recorders are deployed | Per account and Region, aggregatable |
+| Security Hub | Aggregates and scores findings | No | Yes | Organization, reporting only |
+| Service control policies | Denies API actions | No | Yes | Organization, permission ceiling |
+| AWS Control Tower | Landing zone baseline and OU-scoped controls | Only the controls it defines | Yes | Organization structure |
+| WAF, Shield, Network Firewall directly | The protection itself | Per resource, manually | No | Single account and Region |
 
-- You configure the policy once  
-- All new and existing computers (accounts) receive and apply it  
-- If someone disables antivirus or firewall locally — the GPO re-enables it at next sync  
+## What gets tested
 
-> Firewall Manager works the same way for AWS security services — **guardrails**, not just suggestions.
+- **The Config prerequisite.** A policy reporting zero in-scope resources, or an account showing as not protected, points to AWS Config not being enabled in that account or Region. This is the most common Firewall Manager troubleshooting question.
+- **Firewall Manager versus Config.** "Detect security groups allowing 0.0.0.0/0 on 22" can be either. "Ensure they are corrected automatically across all accounts including future ones" is Firewall Manager with a content audit policy and automatic remediation.
+- **Firewall Manager versus SCP.** SCPs cannot create a Web ACL or attach a firewall. Any requirement to apply a protection rather than deny an action is Firewall Manager.
+- **Automatic coverage of new resources.** Wording such as "any new ALB must immediately be protected" is the signature of a Firewall Manager policy rather than a pipeline check or a Config remediation.
+- **The three security group policy types.** Know which one replicates a group, which one audits rules, and which one cleans up unused groups. Questions test the distinction directly.
+- **Deployment models for Network Firewall.** Centralized inspection VPC versus distributed per-VPC endpoints is a cost and blast-radius tradeoff that appears in architecture scenarios.
+- **Global resources.** CloudFront and global Shield protections are managed from us-east-1. Answers that create the policy in the workload Region are wrong for those resource types.
+- **Delegated administrator.** Register a dedicated security account, not the management account, and use administrative scope when different teams own different policy types.
+- **Monitor versus remediate.** If the scenario says teams need time to review before enforcement, the answer is a monitor-only policy first, then enabling remediation.
+- **Cost.** Firewall Manager itself carries no charge. The orchestrated services do, and Shield Advanced in particular is a substantial fixed organizational commitment, which is often the reason a scenario limits its scope.
 
----
+## Limitations
 
-## How It Works (Key Flow)
-
-### 1. Enable AWS Organizations
-
-- You must have **AWS Organizations** set up with **all features enabled**  
-- Designate a **Firewall Manager admin account** (separate from management/root account)
-
-### 2. Define Policies
-
-Firewall Manager supports multiple policy types:
-
-- **AWS WAFv2 Web ACLs** (for ALBs, API Gateway, CloudFront)  
-- **Security Group auditing** (flag overly permissive rules)  
-- **Shield Advanced protections**  
-- **VPC Network Firewall policies**  
-- **DNS Firewall rules** (Route 53 Resolver)
-
-Each policy can target:
-
-- Specific **Organizational Units (OUs)**  
-- **Resource types** (e.g., all ALBs)  
-- **Tags** (e.g., `Environment = Prod`)
-
-### 3. Auto-Enforcement and Remediation
-
-- **Existing resources** are evaluated and corrected  
-- **New resources** launched in the Org will have the policy applied automatically  
-- You can **remediate non-compliant resources** or just **monitor violations**
-
----
-
-## Supported Policy Types
-
-| Policy Type          | Description                                                 |
-|----------------------|-------------------------------------------------------------|
-| **WAF Policy**        | Apply WAF Web ACLs to ALBs, API Gateway, CloudFront         |
-| **VPC Firewall Policy** | Apply AWS Network Firewall rules to VPCs                  |
-| **DNS Firewall Rules** | Enforce DNS-level protections (block C2 domains, DGA)      |
-| **Shield Advanced Policy** | Enroll all relevant resources into Shield Advanced     |
-| **Security Group Audits** | Detect and remediate overly permissive SGs              |
-| **Third-Party Firewall** | Integration with partner firewalls (e.g., Palo Alto, Fortinet via GWLB) |
-
----
-
-## Security and Compliance Benefits
-
-| Feature                    | Why It’s Valuable                                          |
-|----------------------------|------------------------------------------------------------|
-| **Consistent Security Posture** | No account or Region left behind — everyone inherits the same guardrails |
-| **Automatic Remediation**   | Optional enforcement means drift gets corrected automatically |
-| **Policy Scoping**          | Target based on Org Unit, Region, tag, or resource type   |
-| **Visibility**              | Central dashboard of policy compliance across the Org     |
-| **Integration**             | Works with AWS WAF, Shield, Config, Organizations, CloudTrail |
-| **Prevention**              | Stop resource exposure (e.g., open SGs) before incidents   |
-
----
-
-## Real AWS Use Case
-
-Let’s say **SnowySec** is building a SaaS platform with:
-
-- 1 AWS Org  
-- 10 accounts  
-- 3 OUs: `Dev`, `QA`, `Prod`
-
-Snowy enables **Firewall Manager** in the **security tooling account** and sets:
-
-- **WAF Policy**  
-  - Applies to all **ALBs in Prod OU**  
-  - Attaches a Web ACL that blocks **SQLi, XSS, bad bots**
-
-- **Security Group Audit**  
-  - Flags any SG in any OU that allows `0.0.0.0/0` on port 22  
-  - Optionally auto-remediates to lock it down
-
-- **DNS Firewall**  
-  - Applies Route 53 resolver rules to all VPCs  
-  - Blocks domains from a managed threat intel feed
-
-- **Shield Advanced**  
-  - Automatically enrolls all **CloudFront + ELBs** in Prod
-
-**Result:**
-
-✔️ Any new ALB in Prod immediately gets WAF applied  
-✔️ Any open SSH port is flagged and optionally remediated  
-✔️ Every account stays in sync — **zero manual setup needed**
-
----
-
-## Pricing Model
-
-Firewall Manager itself is **free** — but the services it orchestrates are **not**.
-
-| Component                        | Pricing Detail                                         |
-|----------------------------------|--------------------------------------------------------|
-| **Firewall Manager**             | No additional cost                                     |
-| **WAF Web ACLs**                 | Priced per ACL + rule + requests                       |
-| **Network Firewall**             | Charged for endpoint hours and data inspection         |
-| **Shield Advanced**              | ~$3,000/month per account (flat fee)                   |
-| **Route 53 Resolver DNS Firewall** | Priced per rule and query volume                      |
-| **Config/CloudTrail**            | Billed separately if enabled                           |
-
-> If you’re using this org-wide, costs scale with resources — **plan accordingly**.
-
----
-
-## Final Thoughts
-
-**Firewall Manager is your cloud-wide security enforcer.**
-
-It turns **isolated security rules** into **org-wide policies**.  
-It replaces:
-
-> “I *think* the team remembered to enable WAF”  
-With:  
-> “WAF is *always enforced* in Prod.”
-
-If you’re managing a **multi-account AWS environment**, and especially if you care about:
-
-✦ Reducing attack surface  
-✦ Auditability  
-✦ Auto-remediation  
-✦ Enterprise-wide compliance  
-
-…then **Firewall Manager belongs in your toolbox.**
+- Hard dependency on AWS Config across the estate, which brings its own recording cost and its own deployment problem.
+- Supports a fixed set of policy types and resource types. Protections outside that list are not centrally enforceable this way.
+- Policies are Regional, so organization-wide coverage means a policy per governed Region plus us-east-1 for global resources.
+- Automatic remediation is powerful and blunt. Replacing or reverting security group rules and deleting unused groups can break workloads, which is why monitor-only exists as a first phase.
+- Firewall Manager owns the resources it creates. Local teams editing them directly will see changes reverted, which is the intended behavior but a real operational friction point.
+- Evaluation is periodic rather than instantaneous, so there is a window between a resource appearing and the protection being applied.
+- It deploys and enforces protections, it does not inspect traffic itself and it does not tune rules. A badly configured Web ACL enforced everywhere is still a badly configured Web ACL.
+- It does nothing for identity, data protection, or host-level security. It is the network and edge enforcement layer only.

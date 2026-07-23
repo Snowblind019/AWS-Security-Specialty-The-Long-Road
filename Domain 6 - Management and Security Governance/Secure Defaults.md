@@ -1,155 +1,75 @@
 # Secure Defaults in AWS
 
-## What Are Secure Defaults
+A secure default means the safe outcome is what you get when nobody makes a decision. It matters because the failure mode in cloud environments is almost never a deliberate insecure choice, it is an omission: the encryption box nobody checked at 2am, the logging that was going to be enabled later, the public IP that came along with the default subnet. AWS has moved a number of defaults in the right direction, notably S3 Block Public Access and disabled ACLs on new buckets and default object encryption, but the surface is uneven and several consequential settings still default to off. Knowing which is which is only half the work. The other half is that a default you rely on is not a control, because anyone can change it, which is why the real discipline is overriding weak defaults centrally and pinning good ones so they cannot be undone. The thing to hold onto: a secure default protects you from forgetting, an enforced control protects you from someone choosing otherwise.
 
-A secure default means that if a user does nothing, the system’s baseline behavior is already designed to minimize risk.
+## How it works
 
-In AWS terms:
-- An S3 bucket should default to **private**
-- A Security Group should default to **deny all inbound**
-- A KMS key should default to **enable automatic rotation**
-- A new IAM role should **not come with broad permissions**
+**Know the actual defaults, because the exam and real audits both test the exceptions.**
 
-**Why it matters:**
+| Setting | Default state | Secure by default |
+| --- | --- | --- |
+| S3 Block Public Access on new buckets | Enabled | Yes |
+| S3 object ownership and ACLs on new buckets | ACLs disabled, bucket owner enforced | Yes |
+| S3 default encryption | SSE-S3 applied to all objects | Yes |
+| New custom security group | No inbound, all outbound allowed | Inbound yes, outbound no |
+| Default VPC security group | Inbound from itself, all outbound | Partially |
+| IAM users and roles | No permissions | Yes |
+| DynamoDB encryption at rest | Always on, AWS owned key | Yes |
+| Secrets Manager and SQS encryption | Enabled with an AWS managed key | Yes |
+| CloudWatch Logs encryption | Service-managed encryption, CMK opt-in | Partially |
+| CloudTrail trail | No trail created, only 90-day event history | No |
+| CloudTrail data events | Not logged | No |
+| EBS encryption by default | Off, per account and Region setting | No |
+| RDS encryption at rest | Off unless selected at creation | No |
+| KMS customer managed key rotation | Off, opt-in | No |
+| Auto-assign public IPv4 in default subnets | On | No |
+| Public access to AMIs and EBS snapshots | Not blocked unless enabled | No |
+| Session Manager session logging | Off | No |
+| VPC Flow Logs | Off | No |
+| CloudFront viewer protocol policy | HTTP and HTTPS allowed | No |
+| GuardDuty, Security Hub, Config, Macie, Inspector | Off | No |
 
-Most breaches don’t start with some elite zero-day. They start with someone forgetting to tighten permissions, turn on encryption, or block a public port. Secure defaults make it harder to accidentally create vulnerabilities.
+**Account-level settings flip a weak default once for everything after.** EBS encryption by default, S3 Block Public Access at the account level, instance metadata defaults requiring IMDSv2, block public access for AMIs and snapshots, and VPC Block Public Access are per-account, per-Region toggles rather than per-resource choices. These are the highest-leverage fixes available because they require no policy evaluation and no scanning.
 
----
+**Declarative policies make those settings permanent across the organization.** Pinning IMDSv2, allowed AMI sources, snapshot public access blocking, and VPC Block Public Access at an OU means the setting holds regardless of who tries to change it and regardless of new API paths.
 
-## Cybersecurity Analogy
+**SCPs deny the insecure creation path where a condition key exists.** Denying `rds:CreateDBInstance` unless `rds:StorageEncrypted` is true, denying `ec2:RunInstances` when a public IP is requested, denying object writes that do not carry the expected encryption header. This is precise but only as complete as the available condition keys.
 
-Think of AWS as a hotel.
-Secure defaults mean that:
-- Every door is locked by default
-- Room keys expire automatically
-- Hallway cameras are recording from Day 1
-- Staff have least privilege access to just their floor
+**Config rules and conformance packs catch what nothing prevented.** Paired with SSM Automation remediation, they close the loop for resources created before enforcement or through a path the guardrails missed. CIS and PCI conformance packs are effectively pre-packaged inventories of weak defaults.
 
-If someone wants to weaken security (like disabling cameras), they have to consciously do it and leave an audit trail — not just forget to enable something.
+**Launch templates, hardened AMIs, and IaC modules relocate the default.** If the only way teams provision is a launch template with encryption on, no public IP, IMDSv2 required, and an instance profile attached, the organization's effective default is that template regardless of what the service default is. Service Catalog makes this binding when direct API access is denied.
 
-## Real-World Analogy
+**Control Tower and organization services set the detection defaults.** An organization trail, delegated administrator auto-enable for GuardDuty and Security Hub, and an organization Config aggregator mean logging and detection are on in every account including future ones, which addresses the largest block of insecure-by-default items in one move.
 
-Imagine you buy a brand new house.
-Would you expect:
-- The front door to be unlocked by default?
-- The windows to be wide open?
-- The smoke detectors to be disabled unless you turn them on?
+## Comparison
 
-No.
-You expect it to come with a basic level of security already set — so if you do nothing, you’re still reasonably protected.
-**Same in the cloud.**
+| Layer | Applies to | Overridable by a builder | Covers resources created before it | Best for |
+| --- | --- | --- | --- | --- |
+| Account-level setting | Everything in that account and Region | Yes, by anyone with the permission | No | Flipping a weak default cheaply |
+| Declarative policy | Every account in scope | No | No | Making the flipped default permanent |
+| SCP or RCP | Every API call in scope | No | No | Denying an insecure creation path |
+| Config rule with remediation | Live resources | Only by disabling the rule | Yes | Existing fleet and drift |
+| Launch template, AMI, IaC module | Resources provisioned that way | Yes, by not using it | No | Making the safe path the easy path |
+| Service Catalog | Provisioning requests | No, if direct API is denied | No | Self-service within approved patterns |
 
----
+## What gets tested
 
-## Examples of Secure Defaults in AWS (And Weak Defaults to Watch Out For)
+- **Which defaults are actually secure.** New S3 buckets block public access and disable ACLs, and objects are encrypted. RDS encryption, EBS encryption by default, KMS key rotation, CloudTrail trails, and flow logs are not on by default. Questions rely on candidates assuming more is automatic than is.
+- **Encryption cannot be added to an existing RDS instance.** An unencrypted instance must be snapshotted, the snapshot copied with encryption, and restored. This is the standard remediation chain and a favored distractor target.
+- **Account-level over per-resource.** When the requirement is that all new volumes are encrypted, the answer is EBS encryption by default for the account and Region, not a Config rule and not tagging.
+- **Account-level S3 Block Public Access overrides bucket policies and ACLs**, which is why it beats any detective answer when a scenario describes buckets repeatedly being made public.
+- **Pinning versus flipping.** If the scenario says the setting keeps getting changed back, the answer moves from an account setting to a declarative policy or an SCP.
+- **IMDSv2.** Enforce with the account metadata default, a launch template, a declarative policy, or an SCP condition on `ec2:MetadataHttpTokens`. Detecting existing offenders is a Config rule.
+- **Existing resources.** Prevention never fixes what already exists. Complete answers pair a preventive control for the future with Config remediation for the current fleet.
+- **Default VPC exposure.** Default subnets auto-assign public IPv4 addresses. Scenarios about unexpectedly reachable instances often trace to the default VPC rather than to a security group.
+- **Detection defaults.** GuardDuty, Security Hub, Config, and CloudTrail data events are off until enabled, and the scalable answer is delegated administrator auto-enable across the organization.
 
-| AWS Feature              | Default Behavior                        | Secure? ✔️ / ✖️ | Notes                                                                 |
-|--------------------------|-----------------------------------------|------------------|-----------------------------------------------------------------------|
-| S3 Bucket ACLs           | Blocked by default (ACLs disabled)      | ✔️               | New buckets no longer support ACLs unless explicitly enabled         |
-| S3 Bucket Access         | Private by default                      | ✔️               | But can be flipped via UI if not careful                             |
-| Security Groups          | Allow no inbound, all outbound          | ✔️ for inbound   | Outbound could still pose risk depending on workload                 |
-| IAM Users/Roles          | Start with zero permissions             | ✔️               | Follows least privilege                                               |
-| KMS Keys (CMKs)          | Created with auto-rotation off          | ✖️               | Must explicitly enable rotation                                      |
-| CloudTrail               | Not enabled by default                  | ✖️               | Must manually turn on auditing (account-level risk)                  |
-| EBS Encryption           | Enabled by default (as of late 2021)    | ✔️               | Region-level default key can be changed                              |
-| RDS Encryption           | Off unless specified                    | ✖️               | Must check box at creation                                           |
-| VPC Endpoints            | Interface endpoints default to private  | ✔️               | No public IPs exposed                                                |
-| Public IPs on EC2        | Auto-assigned for default subnets       | ✖️               | Must disable manually if needed                                      |
-| CloudFront HTTPS         | HTTP & HTTPS enabled                    | ✖️               | Must enforce HTTPS only (Viewer Protocol Policy)                     |
-| Secrets Manager          | Encrypted with KMS by default           | ✔️               | Tight integration with IAM                                           |
-| SSM Session Manager Logs| Not logged unless configured            | ✖️               | Must explicitly enable logging to CloudWatch or S3                   |
+## Limitations
 
----
-
-## Why Secure Defaults Are Essential in Security Engineering
-
-Security isn’t just about what you configure — it’s about what you **fail to configure**.
-
-**Secure defaults:**
-- Reduce the blast radius of mistakes
-- Act as a safety net when teams move fast
-- Enforce least privilege and least exposure
-- Protect against “oops” moments in the console
-- Aid in compliance (e.g., HIPAA, PCI) by aligning to security baselines
-
----
-
-## Real Risk Example — Misconfigured Defaults
-
-Snowy’s team spins up a test RDS instance during a late-night troubleshooting session.
-They forget to check the “Enable encryption” box.
-
-Weeks later, logs show that customer PII was backed up from prod to test — **unencrypted at rest**.
-
-**What went wrong?**
-- The default was insecure (encryption off)
-- The team assumed encryption was automatic
-
-This is exactly why default behavior needs to be secure — so the absence of a checklist item doesn’t equal a security gap.
-
----
-
-## How to Enforce Secure Defaults at Scale
-
-### 1. Use SCPs (Service Control Policies)
-
-Block risky actions by default at the Org level:
-
-- Deny s3:PutBucketPublicAccessBlock = false
-- Deny RDS creation without encryption
-- Deny EC2 with auto-assigned public IPs
-
-```json
-"Deny if public IP assigned": {
-  "Effect": "Deny",
-  "Action": "ec2:RunInstances",
-  "Condition": {
-    "Bool": {
-      "ec2:AssociatePublicIpAddress": "true"
-    }
-  }
-}
-```
-
-### 2. Use AWS Config Rules
-
-Flag resources that don’t follow secure defaults:
-
-- “S3 buckets must block public access”
-- “RDS must have encryption enabled”
-- “CloudFront must enforce HTTPS only”
-
-**Add auto-remediation** via SSM documents or Lambda.
-
-### 3. Use Custom AMIs and Launch Templates
-
-- Lock down EC2 instances by default
-- Enforce hardened OS images with secure defaults
-- Predefine Security Groups, IAM Roles, encrypted volumes
-
-### 4. Bake Into IaC Templates (CloudFormation / Terraform)
-
-Never rely on human clicks in the Console:
-
-- Hardcode HTTPS enforcement in CloudFront distributions
-- Set KMS key aliases in all storage services
-- Set `associate_public_ip_address = false` in EC2 launch code
-
----
-
-## Final Thoughts
-
-**Security should be the default, not the exception.**
-AWS is trending toward more secure defaults (S3, EBS encryption), but many services still leave it up to you.
-
-**Snowy’s Rule:**
-*“If it can be misconfigured easily, you probably already misconfigured it once.”*
-
----
-
-To win at scale:
-
-- Audit defaults regularly
-- Override weak defaults with Org-level controls
-- Force everything through IaC or pipelines
-- **Think like an attacker:** *where could you slip through?*
+- Defaults change over time and vary by Region, service, and console workflow. Institutional knowledge of "the default is secure" ages badly and should be verified rather than assumed.
+- A default is not a guarantee. Anyone with the relevant permission can change it, so relying on defaults without an enforcement layer means relying on nobody making a change.
+- Account-level settings are per Region, so a Region nobody uses is a Region where the weak default still applies. This is one reason Region restriction is a prerequisite for coherent baselines.
+- Preventive controls apply only forward. Every enforcement decision leaves an existing population that needs separate remediation, sometimes destructively, as with RDS encryption.
+- Condition key coverage is incomplete, so some insecure defaults simply cannot be denied at the API and must be handled with proactive checks or detection.
+- Hardened templates and modules are conventions unless something denies the alternative path, and the console remains the alternative path.
+- Secure defaults reduce accidental exposure only. They do nothing about deliberate misuse by an authorized principal, application flaws, or credential compromise.

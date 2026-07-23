@@ -1,205 +1,78 @@
-# AWS Organizations  
+# AWS Organizations
 
----
+AWS Organizations arranges multiple AWS accounts into a hierarchy of a root, organizational units, and member accounts, and gives you policy types that apply across that hierarchy. Its security significance is that the account is the strongest isolation boundary AWS offers, stronger than IAM within a single account, and Organizations is what makes running many accounts operationally viable. It supplies the permission ceiling that no IAM policy in a member account can exceed, the trusted access and delegated administration model that lets security services operate organization-wide, and the org-level CloudTrail trail that member accounts cannot disable. Consolidated billing is the least interesting thing about it. The thing to hold onto: IAM decides what a principal is allowed to do, Organizations decides the maximum any principal in that account could ever be allowed to do.
 
-## What Is The Service
+## How it works
 
-AWS Organizations lets you **centrally manage and govern multiple AWS accounts** within a hierarchical structure, known as an *organization*. It’s a foundational service for enterprises that need:
+**Structure is root, OUs, accounts.** The root is a container, not the management account. OUs nest several levels deep and are the normal attachment point for policies, because attaching to an OU covers accounts added later. Accounts are created directly or invited in, and can be moved between OUs.
 
-- **Account separation** for billing, isolation, team autonomy, or blast-radius control  
-- **Centralized policies** that apply across accounts (like security guardrails)  
-- **Unified billing** and consolidated management  
-- **Delegated administration** and cross-account operations  
+**Feature sets matter.** Consolidated billing only gives you shared billing and nothing else. All features enabled is required for every policy type, and this prerequisite is the cause of most "the policy cannot be created" scenarios.
 
-It’s *not just a billing service* — it’s a **security and governance powerhouse**. Organizations is the **starting point** for any well-architected multi-account AWS environment.
+**Policy types are distinct tools.** Service control policies and resource control policies are permission ceilings. Tag policies standardize tagging. Backup policies distribute AWS Backup plans. AI services opt-out policies govern AWS's use of your content. Declarative policies pin service configuration durably. Each must be enabled individually before use.
 
----
+**SCPs cap what your principals can do.** They set maximum permissions and never grant anything. Effective permissions are the intersection of the SCP allow and the IAM allow, so an action must be permitted at every level from the root down to the account and also granted in IAM. `FullAWSAccess` is attached by default, and replacing it with an allow list is how deny-by-default organizations are built.
 
-## Cybersecurity and Real-World Analogy
+**SCPs have three important exclusions.** They do not apply to the management account at all, including its root user. They do not apply to service-linked roles. They do not apply to AWS service principals acting on your behalf. The management account exemption is the reason best practice is to run no workloads there.
 
-**Cybersecurity Analogy:**  
-Think of AWS Organizations like a **federated government system**.  
-Each AWS account is like an individual state with its own governance (resources, users, applications), but the **organization root** is like the federal government. It:
+**RCPs cap what your resources can grant.** Where an SCP constrains the principal side, an RCP constrains the resource side, limiting the access that resource-based policies in member accounts can hand out, including to identities outside the organization. Coverage is a defined subset of services rather than everything, and `RCPFullAWSAccess` is the default equivalent. Together with condition keys such as `aws:PrincipalOrgID`, `aws:ResourceOrgID`, `aws:SourceOrgID`, and `aws:PrincipalIsAWSService`, this is the mechanism behind a data perimeter.
 
-- Sets the nationwide laws (guardrails via **SCPs**)  
-- Manages finances (consolidated billing)  
-- Appoints department leads (**delegated admins**) to oversee specific areas (like security or billing)  
-
-You still have autonomy in individual accounts, but everything is **monitored, restricted, and reported centrally** — with fine-tuned control.
-
-**Real-World Analogy:**  
-Imagine a massive corporation with multiple departments: HR, Marketing, Engineering, Finance.  
-Instead of giving all teams access to one giant building (monolithic AWS account), you give each team its **own building (account)** — but connected through a secure campus (organization).  
-
-Now you can:
-
-- Lock down all doors at once (**SCPs**)  
-- Set a single power bill (**consolidated billing**)  
-- Monitor cameras in every building (**CloudTrail org trails**)  
--  Give facilities staff (admins) access to just their own building  
-
-And if one building burns down? The others aren’t affected. That’s the **power of account-level isolation**.
-
----
-
-## Key Concepts in AWS Organizations
-
-| **Concept**             | **Description**                                                             |
-|-------------------------|-----------------------------------------------------------------------------|
-| **Root**                | The top-level parent of all AWS accounts; the org’s central authority       |
-| **Organizational Units**| Groupings of accounts for applying policies and managing structure          |
-| **Member Accounts**     | Child accounts under the org, often for teams, workloads, or environments   |
-| **Service Control Policies (SCPs)** | Guardrails applied at OU or account level to restrict permissions |
-| **Delegated Admins**    | Non-root accounts assigned specific management roles (e.g., GuardDuty)      |
-| **Consolidated Billing**| Single invoice and cost tracking across accounts                            |
-
----
-
-## Why Use AWS Organizations
-
-- **Security Isolation** – Each account is a security boundary. Compromise in one doesn’t affect others.  
-- **Least Privilege by Design** – Avoid cramming unrelated workloads into one account.  
-- **Centralized Governance** – Enforce SCPs to limit what accounts can do (even root users).  
-- **Cost Control** – Centralized billing + detailed usage breakdowns per account/team/env.  
-- **Scaling** – Delegate account ownership while maintaining top-level visibility and control.
-
----
-
-## How It Works
-
-1. **Create an Organization**  
-   - One account becomes the **management account** (formerly "master account")  
-
-2. **Add Accounts**  
-   - Invite existing accounts or create new ones (account vending machine model)  
-
-3. **Create OUs (Organizational Units)**  
-   - Group accounts logically: Security, Prod, Dev, Sandbox  
-
-4. **Attach SCPs (Service Control Policies)**  
-   - Apply guardrails like:  
-     - ✖️ No access to region `ap-south-1`  
-     - ✖️ No use of EC2 Classic  
-
-5. **Set Up Delegated Admins**  
-   - Let certain accounts manage org-wide tools: GuardDuty, Security Hub, Access Analyzer  
-
-6. **Use Org-Integrated AWS Services**  
-   - CloudTrail (org-level trails)  
-   - Security Hub, Macie, Inspector (findings aggregation)  
-   - Tag policies and backup policies (enforce org-wide)
-
----
-
-## Service Control Policies (SCPs) — Guardrails for Governance
-
-SCPs are JSON documents that define the **maximum allowable permissions** for accounts or OUs.  
-
-- Even if an **IAM policy allows** an action, SCPs can **override and block it**  
-- They apply to **all users — including root**  
-- SCPs **can’t grant permissions** — only restrict them
-
-**SCP Example – Deny All Access to `us-east-1`:**
+**Region restriction is a standard pattern with a standard gotcha.** Denying by `aws:RequestedRegion` must exempt global endpoints, or you break IAM, Organizations, Route 53, CloudFront, STS, and Support.
 
 ```json
 {
   "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "DenyUSEast1",
-      "Effect": "Deny",
-      "Action": "*",
-      "Resource": "*",
-      "Condition": {
-        "StringEquals": {
-          "aws:RequestedRegion": "us-east-1"
-        }
-      }
+  "Statement": [{
+    "Sid": "DenyUnapprovedRegions",
+    "Effect": "Deny",
+    "NotAction": [
+      "iam:*", "organizations:*", "route53:*", "cloudfront:*",
+      "sts:*", "support:*", "budgets:*", "waf:*"
+    ],
+    "Resource": "*",
+    "Condition": {
+      "StringNotEquals": { "aws:RequestedRegion": ["us-west-2", "us-east-1"] }
     }
-  ]
+  }]
 }
 ```
 
-SCPs apply to **all users, including root**, in the account.  
-They **cannot grant permissions** — only restrict.
+**Trusted access then delegated administration.** Enabling trusted access lets a service operate across the organization. Registering a delegated administrator moves day-to-day operation out of the management account into a security account. GuardDuty, Security Hub, Macie, Inspector, Detective, IAM Access Analyzer, Config, Audit Manager, Firewall Manager, Backup, and Systems Manager all follow this pattern.
 
----
+**Organization CloudTrail trails are created centrally and are not editable by members.** A member account cannot stop logging, modify the trail, or delete the events, which is the property that makes the trail admissible as evidence.
 
-## Common OU Structure
+**Root credentials can be centralized.** Centralized root access management removes root user credentials from member accounts entirely and performs the few genuinely root-only tasks from the management account through privileged sessions. This eliminates the historical problem of hundreds of dormant root credentials with no MFA.
 
-| **OU**           | **Purpose**                                               |
-|------------------|-----------------------------------------------------------|
-| **Security**     | Centralized accounts for logging, audit, guardrails       |
-| **Infrastructure**| Shared services like DNS, AD, CI/CD                      |
-| **Production**   | Prod workloads (isolated accounts per app/team)           |
-| **Staging**      | Pre-prod testing, similar structure to prod               |
-| **Dev**          | Developer sandboxes                                       |
+## Comparison
 
-This structure supports:
+| Control | Side of the request | Can grant | Applies to management account | Typical use |
+| --- | --- | --- | --- | --- |
+| Service control policy | Principals in member accounts | No | No | Organization-wide guardrails, Region and service restriction |
+| Resource control policy | Resources in member accounts | No | No | Data perimeter, blocking external principals |
+| IAM identity policy | The principal | Yes | Yes | Actual permission grants |
+| Resource-based policy | The resource | Yes | Yes | Cross-account access, service access |
+| Permissions boundary | A specific identity | No | Yes | Safe delegation of IAM administration |
+| Session policy | A single session | No | Yes | Further narrowing at assume-role time |
 
-- ✔️ Separation of concerns  
-- ✔️ Tight access control  
-- ✔️ Easier incident containment
+## What gets tested
 
----
+- **The management account exemption.** An SCP at the root does not restrict the management account. Scenarios describing an action that succeeded despite an SCP usually resolve here, or to a service-linked role.
+- **SCPs do not grant.** Removing `FullAWSAccess` and attaching an allow-list SCP does not give anyone permissions; IAM must still grant them. The intersection rule is tested directly.
+- **SCP versus RCP.** "Prevent our principals from using service X" is an SCP. "Prevent anyone outside the organization from accessing our S3 buckets, even if a bucket policy allows it" is an RCP. Distractors offer SCPs for the second case.
+- **Region deny and global services.** The correct answer uses `NotAction` to exempt global endpoints. An answer denying all actions outside approved Regions breaks IAM and STS.
+- **All features required.** Any policy type question where the organization is in consolidated billing mode has that as the blocker.
+- **Delegated administration.** Security services should be operated from a dedicated security account, not the management account, and trusted access must be enabled first.
+- **Organization trail immutability.** When the requirement is that member account administrators cannot tamper with logging, the answer is an organization trail delivered to a separate log archive account, with S3 Object Lock or a restrictive bucket policy for retention.
+- **Root user hygiene.** Centralized root access management is the modern answer for removing member account root credentials. An SCP denying root is the older, partial answer and does not remove the credential itself.
+- **Data perimeter condition keys.** Recognize `aws:PrincipalOrgID` for restricting to your own principals, `aws:ResourceOrgID` for restricting to your own resources, and `aws:PrincipalIsAWSService` for not breaking legitimate AWS service access.
+- **Cost.** Organizations itself is free, so cost is never the reason to avoid it.
 
-## Pricing
+## Limitations
 
-AWS Organizations is **free to use** — including account creation, OUs, and SCPs.  
-You **only pay** for the AWS services you use in each member account.
-
----
-
-## Security Benefits
-
-- Strong blast-radius containment  
-- Root-account access can be tightly restricted via SCPs  
-- Cross-account trust is **explicit and auditable**  
-- Supports centralized audit and log archiving (e.g., to a **Security OU**)  
-- Minimizes **privilege escalation vectors**
-
----
-
-## Real-Life Example
-
-Let’s say **Blizzard** is building out AWS for a **mid-size SaaS company**.  
-They use **AWS Organizations** to:
-
-- Spin up accounts like:  
-  - `dev-blizzard-app`  
-  - `prod-blizzard-app`  
-  - `security-logs`  
-  - `infra-shared`
-
-- Place them in OUs like:  
-  - `Dev`  
-  - `Prod`  
-  - `Security`
-
-- Attach SCPs like:  
-  - `"Deny S3 public buckets"`  
-  - `"Disallow creation of Internet Gateways in Prod"`  
-  - `"Block unused regions"`
-
-Now each team has **autonomy within their account**, but Blizzard controls:
-
-- ✔️ Boundaries  
-- ✔️ Billing  
-- ✔️ Access  
-- ✔️ Logging  
-- ✔️ Org-wide security services like **GuardDuty**, **Macie**, and **CloudTrail**
-
----
-
-## Final Thoughts
-
-**AWS Organizations** is one of the most important **foundation services** for long-term cloud maturity.  
-It helps teams **grow safely**, **govern securely**, and **operate efficiently** — without central bottlenecks.
-
-It’s not just about structure.  
-It’s about:
-
-- **Security architecture**  
-- **Blast radius control**  
-- **Cost governance**  
-- **Scalable delegation**
+- The management account cannot be constrained by SCPs or RCPs, so it is a permanent exception that must be protected by other means: no workloads, minimal principals, strong root controls.
+- SCPs and RCPs deny only. They cannot grant, cannot remediate existing resources, and cannot express requirements that lack a condition key.
+- Service-linked roles bypass SCPs by design, which is correct behavior but a real gap in reasoning about guarantees.
+- RCP service coverage is partial, so a data perimeter built on RCPs alone leaves uncovered services that still need resource policy discipline.
+- Policy quotas are real: limited policies per entity, a size cap per policy, and a nesting depth limit. Large organizations hit these and must consolidate.
+- Deny-list SCPs grow unmaintainable, and allow-list SCPs break workloads when new services are adopted. Both failure modes appear in practice.
+- Organizations governs the account boundary and permission ceilings. It provides no detection, no logging by itself beyond enabling org trails, and nothing about what happens inside an account within the ceiling.
+- The structure is not trivially reversible. OU design, account placement, and which account is the management account are decisions that are expensive to change later.

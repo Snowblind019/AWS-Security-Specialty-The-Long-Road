@@ -1,195 +1,54 @@
 # Avoiding Insecure Configurations
-## What Is an Insecure Configuration
 
-An **insecure configuration** is when a cloud resource is deployed with **unsafe defaults**, **overly permissive settings**, or **missing critical controls**. These misconfigurations often don’t violate AWS limits or fail CI/CD pipelines — but they silently introduce **attack vectors**.
+An insecure configuration is a resource deployed with unsafe defaults, excessive permissions, or a missing control, where nothing errors, no quota is breached, and no pipeline fails. The deployment succeeds and quietly adds an attack path. This is the dominant cause of cloud compromise, well ahead of exploited vulnerabilities: a bucket left publicly readable, a security group open to 0.0.0.0/0 on 22 or 3389, a policy granting `*` on `*`, an instance still answering IMDSv1, an RDS instance marked publicly accessible. The security discipline is not detection alone, it is layering controls so the insecure state cannot be created, is caught before deployment if it can be, is detected within minutes if it is, and is remediated automatically. The thing to hold onto: a preventive control makes the API call fail, a detective control tells you it succeeded, and the exam almost always wants the preventive one first.
 
-### Examples:
-- An S3 bucket with **public read access**  
-- A security group open to `0.0.0.0/0` on port 22 or 3389  
-- An IAM policy with `*:*` permissions  
-- An EC2 instance with **no CloudWatch logging** or **IMDSv2 disabled**  
-- An RDS instance with **public accessibility enabled**  
+## How it works
 
-**Why it matters:**  
-Most breaches in cloud environments stem from **misconfigurations**, not zero-day exploits. Preventing these from getting deployed in the first place is critical for a **preventative security posture**.
+**Preventive at the permissions layer.** Service control policies and resource control policies cap what any principal in the organization can do, regardless of IAM grants. Condition keys make them precise rather than blunt: deny `rds:CreateDBInstance` unless `rds:StorageEncrypted` is true, deny `s3:PutObject` without the expected encryption header, deny `ec2:RunInstances` when `ec2:MetadataHttpTokens` is not `required`, deny principals outside the org on resource policies. SCPs never grant, they only set the ceiling, and they do not apply to the management account.
 
----
+**Preventive at the service layer.** Some controls are account-wide switches rather than policies. S3 Block Public Access set at the account level overrides any bucket-level or ACL-level attempt to go public. EBS encryption by default is a per-Region account setting. IMDSv2 can be made the account default for new instances. These are stronger than a policy because there is no condition to get wrong.
 
-## Cybersecurity Analogy
+**Preventive across accounts for network objects.** AWS Firewall Manager applies security group policies, WAF rules, Network Firewall, and DNS Firewall centrally across an organization, and can audit and auto-remediate non-compliant security groups. This is the answer when a scenario says "across all accounts and any new account" for network exposure.
 
-Imagine giving your house keys to a housekeeper… but also giving them your **alarm code**, **garage opener**, **master password**, and **ATM PIN**.  
-That’s what `iam:*` does — **way more than necessary**.  
-Insecure configs are like **putting your valuables on the front porch and hoping nobody notices**.
+**Proactive before deployment.** IaC scanning catches the pattern in the template rather than the resource. Static analysis with cfn-lint, CloudFormation Guard, or third-party scanners runs in the pipeline. CloudFormation Hooks evaluate a stack operation before provisioning and can block it. AWS Config proactive rules evaluate a proposed resource configuration before it is created. IAM Access Analyzer custom policy checks (`CheckNoNewAccess`, `CheckAccessNotGranted`, `ValidatePolicy`) belong in the same pipeline stage to fail a merge that would widen permissions.
 
-## Real-World Analogy
+**Detective at runtime.** AWS Config rules evaluate live resource state against managed or custom rules, packaged as conformance packs for CIS, PCI DSS, NIST, and similar. Security Hub aggregates those evaluations into scored standards. GuardDuty and Inspector cover behavior and vulnerabilities rather than configuration, so they complement rather than replace this layer.
 
-Let’s say Snowy buys a new router, plugs it in, and never changes the **default admin password** or **Wi-Fi name**.
+**Responsive.** Config remediation actions invoke SSM Automation documents to fix a resource on detection. EventBridge on Config compliance change events or Security Hub findings drives Lambda or Step Functions for anything Automation cannot express.
 
-Technically, it works.  
-But anyone nearby can brute-force or guess the default credentials — and boom, **network compromised**.
+**Governed centrally.** AWS Control Tower expresses all three modes as controls: preventive controls implemented as SCPs, detective controls implemented as Config rules, and proactive controls implemented as CloudFormation Hooks, applied per organizational unit. Organizations declarative policies enforce persistent service configuration such as EC2 metadata defaults and blocking public AMI sharing, and they survive attempts to change the setting rather than merely denying the call.
 
-Insecure configs are like **using factory defaults** and assuming nobody will check.
+**Drift closes the loop.** Perfect IaC does not survive console access. AWS Config tracks configuration history and compliance over time, CloudFormation drift detection compares live stacks to their templates, and Terraform plan compares actual to intended state. Without a drift mechanism, a temporary manual change becomes a permanent one.
 
----
+## Comparison
 
-## Common Insecure Config Patterns in AWS
+| Control | Timing | Enforcement point | Failure mode when used alone |
+| --- | --- | --- | --- |
+| SCP and RCP | Preventive, at the API call | Organizations permission ceiling | No coverage of the management account, no visibility into attempts unless logged |
+| Declarative policy | Preventive, persistent setting | Organizations service configuration | Limited to supported services and attributes |
+| IaC scanning and CFN Hooks | Proactive, pre-deployment | Pipeline or stack operation | Blind to console and CLI changes made outside the pipeline |
+| Config rules | Detective, post-creation | Resource configuration evaluation | The insecure resource existed before it was flagged |
+| Firewall Manager | Preventive and remediating | Org-wide network objects | Scoped to network and WAF constructs only |
+| Security Hub | Detective, aggregation | Findings across accounts | Reports posture, changes nothing |
 
-| **Resource**      | **Insecure Configuration Example**                  | **Why It’s Dangerous**                         |
-|-------------------|-----------------------------------------------------|------------------------------------------------|
-| S3 Bucket         | `BlockPublicAccess = false`                         | Public data leaks                              |
-| Security Group    | Inbound rule: `0.0.0.0/0 -> port 22`                | Open to SSH brute-force                        |
-| IAM Role/Policy   | `Action: "*", Resource: "*"`                        | No least privilege                             |
-| EC2 Instance      | Public IP + SSH open + no IMDSv2                    | Complete takeover risk                         |
-| RDS               | `Publicly Accessible = true`                        | Attack surface exposed                         |
-| Lambda            | No environment variable encryption                  | Secrets in plaintext                           |
-| ECS Task          | No IAM role, accesses resources via env vars        | Secret sprawl                                  |
-| CloudFront        | `Viewer Protocol Policy = Allow HTTP`               | No encryption in transit                       |
-| API Gateway       | No usage plan or throttling                         | DoS risk, overuse                              |
+## What gets tested
 
----
+- **Prevent versus detect.** Wording matters. "Ensure it cannot be created" or "must not be possible" means SCP, RCP, account-level setting, or declarative policy. "Identify," "report," or "alert on" means Config rules and Security Hub. "Automatically fix" means Config remediation with SSM Automation.
+- **Account-level S3 Block Public Access.** When a scenario says a bucket policy or ACL keeps re-enabling public access, the answer is account-level BPA, which overrides both, not a Config rule that merely reports it.
+- **Firewall Manager for security groups.** Any scenario requiring uniform security group enforcement across every existing and future account points to Firewall Manager, not to per-account Config rules.
+- **IMDSv2.** Enforce with the instance metadata account default, a launch template setting, or an SCP with the `ec2:MetadataHttpTokens` condition. Reporting existing offenders is a Config rule.
+- **Least privilege in a pipeline.** IAM Access Analyzer custom policy checks are the correct answer for blocking a policy change that grants new access at merge time. Access Analyzer external access findings are the detective counterpart for unintended cross-account exposure.
+- **Proactive Config rules and CloudFormation Hooks.** These appear as the answer when the requirement is to block during provisioning but the deployment path is CloudFormation rather than the organization boundary.
+- **Control Tower control types.** Know that preventive maps to SCP, detective maps to Config, proactive maps to Hooks. Questions test the mapping directly.
+- **Conformance packs.** The right answer for deploying a full CIS or PCI rule set across an organization in one operation rather than rule by rule.
 
-## How to Prevent Insecure Configurations
+## Limitations
 
-### 1. Use Secure Baselines (Modules)
-
-- Start with **hardened IaC modules** (Terraform, CloudFormation)  
-- Embed guardrails: **least privilege**, **deny policies**, **logging**, **encryption**
-
-### 2. Enable AWS Config Rules
-
-Use built-in rules like:
-
-- `s3-bucket-public-read-prohibited`  
-- `iam-user-no-policies-check`  
-- `ec2-instance-no-public-ip`  
-
-Apply **Conformance Packs** for frameworks like **CIS**, **PCI**, **NIST**.
-
-### 3. Use Static Analysis & Linters
-
-Tools for scanning IaC:
-
-- **Checkov** (Terraform/CFN)  
-- **tfsec**  
-- **cfn-lint**  
-- **cfn-guard**  
-- **AWS CloudFormation Guard**
-
-Catch dangerous patterns like:
-
-```hcl
-resource "aws_security_group" "bad" {
-  ingress {
-    cidr_blocks = ["0.0.0.0/0"]
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-  }
-}
-```
-
-### 4. Leverage Service Control Policies (SCPs)
-
-At the **organization level**, SCPs help enforce guardrails **before anything gets deployed**.
-
-Use SCPs to:
-
-- Prevent dangerous permissions like `iam:*` or `kms:Decrypt` from being assigned freely  
-- Block creation of **public S3 buckets**, **unencrypted RDS instances**, etc.  
-- Restrict usage of **unsupported Regions** or services  
-
-**SCPs act as permissions boundaries** — even if someone tries to deploy insecure infra, the request is blocked at the org level.
-
-### 5. Guard Your CI/CD Pipelines
-
-Security can’t be left until runtime — it must be embedded in your **CI/CD tooling**.
-
-Enforce:
-
-- **Template scans before merge/deploy**  
-- Blocking of **high-risk resource types** unless approved  
-- Manual approvals for **IAM/Security Group changes**  
-
-Integrate tools like:
-- **GitHub Actions**  
-- **OPA (Open Policy Agent)**  
-- **AWS CodePipeline**  
-- **Custom pre-commit hooks**
-
-### 6. Enable Logging
-
-**Insecure = unobservable**.  
-If you can't see what's happening, you can't secure it.
-
-Turn on logging across all layers:
-
-- **AWS CloudTrail (org-wide)** — API-level visibility  
-- **S3 Server Access Logs** — track access to sensitive buckets  
-- **VPC Flow Logs** — detect lateral movement or data exfiltration  
-
-- **Lambda Execution Logs** — catch insecure runtime behavior  
-- **Route 53 Resolver Logs** — monitor DNS queries for suspicious patterns  
-
-Logging is also required for **forensics**, **audits**, and **compliance**.
-
----
-
-## Drift Detection Is Your Backup Alarm
-
-Even if your IaC is perfect, **manual changes** happen:
-
-> "Quick fix in prod…"  
-> "Just testing something in the console…"  
-> "It’s only temporary…"  
-
-
-Drift introduces silent risk.
-
-Use:
-
-- **AWS Config** — tracks resource compliance and drift  
-- **CloudFormation Drift Detection** — detects differences between template and live stack  
-
-- **Terraform plan/apply** — compare actual vs intended state  
-
-Make drift detection part of your **daily security hygiene**.
-
----
-
-## Snowy’s Team Strategy
-
-Snowy’s org has **4 teams with production access**. To prevent misconfigurations:
-
-- All **Terraform runs** must pass **Checkov + tfsec**  
-- **GitHub** enforces **OPA policies** to block public S3 modules  
-- **AWS Config** sends **Slack alerts** when security groups are changed  
-- **SCPs** prevent **RDS instances with public IPs** from being created  
-
-> ❗ No one can say “I didn’t know.”  
-> ❗ It’s enforced **by design**, not by memory or hope.
-
----
-
-## Final Thoughts
-
-Cloud misconfigurations don’t always come from **carelessness**.  
-They come from:
-
-- **Speed**  
-- **Copy-paste culture**  
-- **Lack of visibility**
-
----
-
-### Snowy’s Rule:
-
-> **If it’s possible to misconfigure, someone eventually will.**
-
-So we:
-
-- **Embed guardrails** into IaC and pipelines  
-- **Block insecure patterns** with policies and controls  
-- **Audit continuously** with logs, Config rules, and drift detection  
-
-That’s how you stay secure — even when everything is moving fast.
-
+- SCPs do not apply to the management account, so an organization relying solely on them has an uncovered account by design.
+- SCPs and RCPs deny only. They cannot grant, cannot fix an existing resource, and cannot express requirements that have no condition key.
+- Condition-key coverage is uneven. Many attributes simply cannot be constrained at the API call, which is why account-level settings and proactive checks exist.
+- Config is detective and evaluation is not instantaneous. There is a window in which the insecure resource is live, so Config alone is unsuitable for anything catastrophic on creation.
+- Config cost scales with rule evaluations and configuration items recorded. Broad recording across a large organization is a real line item, and it is the usual reason a scenario describes partial coverage.
+- IaC scanning is only as good as the deployment discipline. Console and CLI changes bypass it entirely, which is why drift detection is mandatory rather than optional.
+- Drift detection reports differences, it does not revert them. Reverting requires a pipeline re-apply or an automated remediation.
+- None of these layers address application-level flaws, credential theft, or misuse by a correctly permissioned principal. Configuration hardening reduces the attack surface, it does not cover behavior.

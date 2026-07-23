@@ -1,194 +1,57 @@
-# AWS Systems Manager (SSM)
+# AWS Systems Manager
 
-## What Is the Service
+Systems Manager is a collection of capabilities for operating managed nodes, and its security significance is that it inverts the access model. Nothing connects inbound. The SSM Agent on each node authenticates with an instance profile and reaches out over HTTPS, so administrative access, command execution, patching, and configuration enforcement all happen without a public IP, an open port 22 or 3389, a bastion host, or a distributed SSH key. Access becomes an IAM decision rather than a network one, which means it can be scoped by tag, conditioned on source VPC or MFA, revoked instantly, and logged with attribution to a named principal. It also carries the corresponding risk: a principal with broad Run Command or Session Manager permissions has root on the fleet without ever touching the network, which makes SSM permissions among the most sensitive in an account. The thing to hold onto: SSM converts server access from a network control problem into an IAM and logging problem, which is an improvement only if the IAM and logging are done properly.
 
-**AWS Systems Manager (SSM)** is a suite of *remote management tools* for your AWS infrastructure. It’s not just one service — it’s a collection of sub-services (called **capabilities**) that give you:
+## How it works
 
-- Secure shell access to EC2s (without SSH)
-- Automated patching and AMI baking
-- Parameter storage and secret distribution
-- Runbook execution and incident response
-- Centralized inventory and compliance scanning
-- Remote command execution across hundreds of machines
+**The agent plus an instance profile plus a network path.** A node becomes managed when the SSM Agent runs, the instance profile grants `AmazonSSMManagedInstanceCore` or equivalent, and the agent can reach the Systems Manager endpoints. In a private subnet with no NAT, that means interface VPC endpoints for `ssm`, `ssmmessages`, and `ec2messages`, plus `kms`, `logs`, and an S3 gateway endpoint if session encryption and logging are used. Default Host Management Configuration can manage EC2 instances without an instance profile, and hybrid activations extend management to on-premises and other-cloud servers.
 
-The key difference? **No public IPs, no inbound ports, no bastion hosts, and no SSH keys.** Everything is tunneled through the **SSM Agent** over outbound HTTPS to AWS. It’s encrypted, auditable, identity-based — and far more secure than legacy methods.
+**Session Manager replaces SSH and RDP.** Sessions are brokered by AWS, encrypted in transit, and optionally encrypted with a KMS key. Logging to CloudWatch Logs or S3 captures session output, session preferences are held in a document that can enforce logging and KMS for everyone, and Run As maps a session to a specific local user rather than defaulting to a privileged one. Port forwarding and SSH tunneling over Session Manager cover cases that need a real socket.
 
-If you're trying to design a **Zero Trust**, multi-account, automated cloud environment — **SSM** is the remote control panel.
+**Session access is scoped with IAM conditions.** Tag-based conditions on the target instance restrict who may connect to what. `ssm:SessionDocumentAccessCheck` prevents a user from starting a session with an arbitrary document that would bypass the configured preferences. Conditions on source VPC endpoint, source IP, and MFA presence apply as normal.
 
----
+**Run Command and Automation are the execution surfaces.** Run Command executes a document against a target set defined by instance IDs, tags, or a resource group. Automation runbooks perform multi-step workflows and are the execution engine behind Config auto-remediation and Security Hub custom actions. Both assume roles, so the effective permissions of an automation are those of its role, not the invoker.
 
-## Cybersecurity Analogy
+**Patch Manager enforces the patching baseline.** Patch baselines define approval rules and exceptions, patch groups associate nodes to baselines through a tag, maintenance windows schedule the work, and patch policies simplify org-wide rollout. Compliance results feed Systems Manager Compliance and can surface in Config and Security Hub.
 
-Imagine a traditional data center. To access servers, you’d open ports, manage jump boxes, handle VPNs, and rotate SSH keys — a nightmare to scale or secure.
+**State Manager and Inventory hold configuration steady and visible.** Associations enforce desired state on a schedule, Inventory collects installed packages, users, network configuration, and more, which is what makes fleet-wide questions answerable during an incident.
 
-**SSM** replaces that with a **central command room** where you issue voice commands to agents inside each room.
-They only *listen to trusted commands*, don’t expose themselves to the outside, and report everything they do.
+**Parameter Store is configuration storage with an encryption option.** `SecureString` parameters are encrypted with KMS and are available in the standard tier, not just advanced. The advanced tier buys larger values, a higher parameter count, and parameter policies such as expiration and change notification. Access is scoped by parameter path and by IAM conditions, and reads are logged in CloudTrail alongside the KMS decrypt.
 
-It flips the model: *no one connects in*, the agents *reach out securely*.
+**Parameter Store versus Secrets Manager.** Secrets Manager provides managed rotation with Lambda, resource-based policies for cross-account access, and cross-Region replication, at a per-secret cost. Parameter Store provides versioning and KMS encryption with no rotation framework and no resource policy. Database credentials and anything requiring rotation belong in Secrets Manager; configuration values, flags, and AMI IDs belong in Parameter Store.
 
-## Real-World Analogy
+**Everything is logged.** CloudTrail records `StartSession`, `TerminateSession`, `SendCommand`, `StartAutomationExecution`, `GetParameter`, and the rest, which makes EventBridge rules on sensitive SSM actions a practical detection control.
 
-Picture a team of robots (**SSM agents**) deployed across hundreds of factory buildings (EC2s, on-prem VMs, containers). Instead of driving out to each location with a key to open the door, you issue orders from HQ.
+## Comparison
 
-Those robots listen on a secure line, execute the tasks, and report back with logs, status, and screenshots.
+| Access method | Inbound port required | Credential to manage | Native session logging | Works without public IP or NAT |
+| --- | --- | --- | --- | --- |
+| Session Manager | None | None, IAM only | Yes, CloudWatch Logs or S3 | Yes, with interface VPC endpoints |
+| Bastion host with SSH | Yes, on the bastion | SSH keys | No, requires host-side tooling | Bastion needs reachability |
+| EC2 Instance Connect | Yes, port 22 | Ephemeral keys via IAM | No | No |
+| EC2 Instance Connect Endpoint | None from the internet | Ephemeral keys via IAM | Connection logs only | Yes |
+| Direct SSH over VPN or Direct Connect | Yes, from the private network | SSH keys | No | Yes, private path |
 
-You didn’t have to drive. You didn’t open any doors. But the job got done.
+## What gets tested
 
----
+- **Private subnet connectivity.** A managed node in a private subnet with no NAT requires interface endpoints for `ssm`, `ssmmessages`, and `ec2messages`. An instance that does not appear as managed is almost always missing one of the endpoint, the agent, or the instance profile.
+- **Session Manager over bastions.** Any scenario requiring administrative access with no open ports, no key management, and full auditability resolves to Session Manager with logging to CloudWatch Logs or S3.
+- **Enforcing session logging.** Configure session preferences with logging and a KMS key, and use `ssm:SessionDocumentAccessCheck` to stop users from starting sessions with their own document, which is the bypass the condition key exists to close.
+- **Scoping who can reach which instance.** IAM conditions on instance tags, not security groups, because there is no network path to restrict.
+- **Parameter Store versus Secrets Manager.** Rotation, cross-account resource policies, and cross-Region replication mean Secrets Manager. Cost-sensitive configuration storage with KMS encryption means Parameter Store with `SecureString`.
+- **Automation as the remediation engine.** Config rules remediate through SSM Automation documents, and Security Hub custom actions invoke them through EventBridge. Recognize Automation as the executor rather than Lambda when a managed document exists.
+- **Patch compliance.** Patch baselines plus patch groups plus maintenance windows, reported into Systems Manager Compliance and Security Hub. Inspector finds vulnerabilities; Patch Manager fixes them.
+- **Detecting unmanaged or tampered nodes.** The Config rule for instances managed by Systems Manager, plus Inventory, identifies hosts that dropped off the agent.
+- **Hybrid and on-premises.** Hybrid activations bring non-EC2 servers under the same IAM-controlled access and patching model.
+- **Least privilege on SSM itself.** `ssm:SendCommand` and `ssm:StartSession` on `*` is effectively fleet-wide root. Correct answers scope by resource ARN and tag.
 
-## How It Works (Core Architecture)
+## Limitations
 
-The core component of **SSM** is the **SSM Agent**, which must be installed and running on each managed instance.
-
-### SSM Agent
-
-- Communicates **outbound** to the Systems Manager endpoint (HTTPS on port 443)
-- Authenticates using **IAM instance profile**
-- Must be allowed via **VPC endpoints** or outbound internet access (depending on network config)
-
-### IAM
-
-The instance (or user) needs an **IAM role** granting access to the **SSM actions** (e.g., `ssm:SendCommand`, `ssm:StartSession`, etc.).
-
----
-
-## Key Services / Capabilities
-
-| **Capability**     | **Description**                                                                 |
-|--------------------|----------------------------------------------------------------------------------|
-| **Session Manager**| Shell access to EC2 instances (no SSH, no keys, no ports)                        |
-| **Run Command**    | Run shell commands or scripts on one or more instances                          |
-| **Patch Manager**  | Schedule and apply OS patches                                                    |
-| **Automation**     | Define **runbooks** to perform common tasks (backups, restarts, incident responses) |
-| **Parameter Store**| Store strings, configs, and secrets (can integrate with **KMS**)                |
-| **Inventory**      | Collect metadata from managed instances (packages, users, processes)             |
-| **State Manager**  | Enforce desired state (install software, configure settings)                     |
-
-All of these are **region-aware**, **IAM-controlled**, **audit-logged**, and designed for **large-scale fleet operations**.
-
----
-
-## Session Manager (Highlight)
-
-One of the most critical security features — **SSM Session Manager** — replaces SSH.
-
-- No need to open port 22
-- No need for public IPs
-- No need to manage SSH key pairs
-- All sessions are **recorded and auditable**
-- Can stream session logs to **CloudWatch Logs** or **S3**
-- Supports **Run As** for privilege escalation
-- Can be restricted by **tags, IP allowlists, MFA, source VPC**, and more
-
-**CloudTrail** will log `StartSession`, `TerminateSession`, and even `SendCommand` events, while **CloudWatch** can record every keystroke.
-
-This is foundational to **Zero Trust** server access.
-
----
-
-## Parameter Store vs Secrets Manager
-
-**SSM** includes **Parameter Store**, which lets you store:
-
-- Plaintext config values (*Standard tier*)
-- Encrypted secrets (*Advanced tier*) using **KMS**
-- Values can be tagged, versioned, and used in scripts or templates
-
-| **Feature**         | **Parameter Store**              | **Secrets Manager**                   |
-|---------------------|----------------------------------|----------------------------------------|
-| **Rotation support**| Manual                           | Built-in auto rotation                 |
-| **Audit logs**      | CloudTrail                       | CloudTrail + KMS + rotation            |
-| **Pricing**         | Free (Standard), $ (Advanced)    | $0.40/secret/month                     |
-| **Ideal for**       | App configs, flags               | DB creds, API tokens                   |
-
-Use **Parameter Store** for *configs and non-sensitive flags*.
-Use **Secrets Manager** for *high-entropy secrets* that need rotation and external access control.
-
----
-
-## Visibility and Auditing
-
-**SSM** is fully integrated with **CloudTrail**. You can see:
-
-- Who started a session
-- What commands were run
-- When a patch was applied
-- What parameters were read or modified
-- Who initiated an automation workflow
-- What role assumed access to a node
-
-You can also:
-
-- Send session logs to **CloudWatch Logs** or **S3**
-- Configure **AWS Config** rules to detect **unpatched** instances or missing agents
-- Use **EventBridge** to trigger alerts when sensitive actions occur (e.g., `ssm:GetParameter` on secure values)
-
----
-
-## Security Considerations
-
-| **Concern**             | **Mitigation**                                                                 |
-|--------------------------|-------------------------------------------------------------------------------|
-| **Agent tampering**      | Use Config to detect stopped agents or missing installations                  |
-| **Unauthorized access**  | Lock down IAM roles (`ssm:SendCommand`, `ssm:StartSession`)                   |
-| **Overly broad parameters**| Use IAM conditions for resource ARNs, tags, or path restrictions           |
-| **Insecure parameter storage**| Use `SecureString` + `KMS` + policies                                 |
-| **Shell escalation**     | Restrict Run As behavior, use IAM for command scoping                         |
-| **Audit bypass**         | Require session logging and validate trail completeness                      |
-
-**SSM** can be used **securely or dangerously** — the difference is in how tightly you configure the policies and **observability**.
-
----
-
-## Pricing Model
-
-Most **SSM** features are **free**, but some are tied to **advanced tiers**:
-
-| **Feature**        | **Cost**                                     |
-|--------------------|----------------------------------------------|
-| **Session Manager**| Free                                         |
-| **Run Command**    | Free                                         |
-| **Patch Manager**  | Free                                         |
-| **Automation**     | Free up to 100 steps/day, then paid          |
-| **Parameter Store**| Free (Standard tier), paid (Advanced)        |
-| **Inventory**      | Free                                         |
-| **CloudWatch Logs**| Priced separately per log group usage        |
-
-> **Secrets Manager** is *more expensive*, but **Parameter Store** (Advanced tier) can cover some overlap at a lower cost.
-
----
-
-## Real-Life Example: Snowy’s No-Bastion EC2 Management
-
-You’ve got a private **subnet** with 50 EC2 instances spread across **dev**, **staging**, and **prod**.
-No public IPs. No bastion hosts. No SSH.
-
-You assign the **SSM Agent** role (`AmazonSSMManagedInstanceCore`) to each EC2 and configure **VPC Endpoints** for `ssm`, `ec2messages`, and `ssmmessages`.
-
-Now, your team can:
-
-• Connect to any instance using **Session Manager**, with logs sent to **CloudWatch**
-• Run fleet-wide updates using **Run Command** or **Patch Manager**
-• Store environment flags (like feature toggles) in **Parameter Store**
-• Trigger incident response scripts using **Automation runbooks**
-• Monitor compliance status using **Inventory** and **State Manager**
-
-Every action is **tracked, authorized, and scoped** by **IAM**, with no inbound access ever exposed to the internet.
-
----
-
-## Final Thoughts
-
-**AWS Systems Manager is the most underrated service in AWS security.**
-It touches every stage of the lifecycle:
-
-• Access control (**Session Manager**)
-• Patch and compliance (**Patch**, **Inventory**)
-• Secure storage (**Parameter Store**)
-• Automation and remediation (**Run Command**, **Automation**)
-• Logging and audit trails (**CloudTrail**, **Config**, **CW Logs**)
-
-And it does it **without requiring SSH, bastions, or manual scripts.**
-
-If you want a **modern, automated, secure cloud** — you’re going to use **SSM**.
-The only question is **how well** you configure it.
+- Depends on the agent. A node with a stopped, outdated, or removed agent is unmanaged and invisible to Session Manager, Patch Manager, and Inventory, and detecting that is a separate control.
+- Network prerequisites are non-trivial in private architectures, and the endpoint set is easy to get partially wrong, which produces nodes that are managed for some capabilities and not others.
+- Session logging captures terminal output, not intent. It is strong evidence and weak prevention, and interactive shells still allow anything the local user can do.
+- Broad SSM permissions are equivalent to administrative access on every targeted host, and they are frequently granted more loosely than the equivalent SSH access would be.
+- Automation runbooks execute with their own role, so a permissive automation role is a privilege escalation path for anyone who can start the automation.
+- Parameter Store has no rotation, no resource-based policy, and standard-tier throughput limits that surface under load.
+- Patch Manager applies vendor patches on a schedule; it does not validate that the patch fixed anything, and Inspector findings remain the measure of vulnerability state.
+- Systems Manager is Regional and per account, so fleet-wide operations across an organization require delegated administration or per-account orchestration.

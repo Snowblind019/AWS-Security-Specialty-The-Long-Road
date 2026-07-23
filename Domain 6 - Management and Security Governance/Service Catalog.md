@@ -1,149 +1,56 @@
 # AWS Service Catalog
 
-## What Is AWS Service Catalog
+AWS Service Catalog publishes vetted infrastructure templates as products that end users can launch without holding the permissions to create the underlying resources. That last clause is the whole security proposition. A developer who needs an encrypted, tagged, hardened EC2 stack does not get `ec2:RunInstances` and `iam:PassRole`; they get permission to launch one specific product, and Service Catalog assumes a launch role to build it on their behalf. The result is self-service provisioning where the only configurations reachable are the ones a security team authored and versioned, with parameter values constrained, tagging enforced, and every provisioning action recorded in CloudTrail. It is the practical answer to the tension between developer autonomy and least privilege, which is otherwise resolved badly in both directions. The thing to hold onto: Service Catalog moves the permission from the person to the product, so the approved path becomes the only path a low-privileged user has.
 
-AWS Service Catalog is a governance and self-service tool that allows organizations to curate and control the deployment of approved AWS resources. Think of it as your internal cloud product marketplace, but with guardrails.
-You, as the cloud architect or security engineer, define pre-approved templates for infrastructure — EC2 instances, RDS databases, VPCs, S3 buckets, or entire applications. Then you publish them to end users, who can launch them through a UI or CLI — without needing full admin access.
+## How it works
 
-Service Catalog lets you:
-- Enforce security, cost, and tagging policies
-- Enable self-service for developers or teams
-- Maintain standardization and compliance
-- Automate complex stacks (CloudFormation behind the scenes)
-- Reduce cloud sprawl and unauthorized resource creation
+**Products are versioned templates.** A product wraps a CloudFormation template, or a Terraform configuration using the Terraform product types, with version history. Versions can be deprecated so existing deployments keep running while new launches move to the current one.
 
----
+**Portfolios group products and carry permissions.** Access is granted to IAM users, groups, and roles at the portfolio level, so entitlement is managed by collection rather than per product.
 
-## Cybersecurity Analogy
+**The launch constraint is the security control.** It names an IAM role that Service Catalog assumes to provision the stack. The end user needs only Service Catalog permissions, typically the end-user managed policy, and never needs the underlying resource permissions. Without a launch constraint the user's own permissions are used, which discards most of the benefit.
 
-Imagine **SnowySec** is a fast-growing startup. Developers keep spinning up EC2s, S3 buckets, and VPCs… and forgetting things like encryption, MFA, backups, or tagging.
+**Other constraints narrow the product further.** Template constraints restrict parameter values with rules, so a user cannot pick an unapproved instance type or disable encryption through a parameter. TagOptions enforce required tag keys and permitted values. Notification constraints publish stack events to SNS for approval and alerting workflows. Resource update constraints control whether users may change tags on provisioned resources. StackSet constraints let a single launch deploy across accounts and Regions.
 
-So Snowy builds a company catalog:
-- “Here’s the official EC2 template” — with hardened AMIs, proper IAM roles, and logging enabled
-- “Here’s the RDS PostgreSQL stack” — encrypted, backed up, with alerts baked in
-- “Here’s the VPC layout” — following SnowySec’s zero-trust network policy
+**Portfolio sharing scales it across the organization.** Sharing through AWS Organizations distributes a portfolio to an OU or the whole organization without per-account invitations, and shared portfolios remain owned and updated centrally, so a template fix propagates rather than being copied. Principal sharing lets the sharing account define which principal names in receiving accounts get access.
 
-Developers can launch any of these stacks — but only these. That’s AWS Service Catalog in action.
+**Provisioned products are the deployed instances.** Users see and manage only their own, can update to a newer product version, and can terminate. Drift detection compares a provisioned product to its template.
 
-## Real-World Analogy
+**Service actions cover day-two operations.** Defined as SSM Automation documents, they let a user restart an instance, rotate something, or run a maintenance task against their provisioned product without holding the underlying API permissions or console access.
 
-Think of Service Catalog like a company vending machine:
-- You choose what snacks go in (CloudFormation products)
-- You set who can access what rows (IAM + portfolios)
-- You limit how often each snack can be picked (budgets, quotas)
-- Employees don’t get to stock or mix snacks — only consume what’s approved
+**Control Tower Account Factory is built on it.** Account provisioning is surfaced as a Service Catalog product, which is why account creation can be delegated to teams that hold no Organizations permissions.
 
-It creates safe freedom — autonomy with boundaries.
+**It is only mandatory if the alternative is denied.** Service Catalog constrains what a low-privileged user can do. Making it the sole provisioning path requires IAM and SCPs that deny direct resource creation, otherwise it is an option rather than a control.
 
----
+## Comparison
 
-## How It Works (Core Concepts)
+| Mechanism | Consumer needs resource permissions | Constrains parameter values | Central update propagation | Cross-account deployment |
+| --- | --- | --- | --- | --- |
+| Service Catalog product | No, with a launch constraint | Yes, template constraints | Yes, via shared portfolios | Yes, with StackSet constraints |
+| Direct CloudFormation | Yes, or via a stack service role | Only by template design | No | No |
+| CloudFormation StackSets | Not applicable, administratively deployed | Not applicable | Yes | Yes |
+| Shared Terraform module | Yes | Only by module design | Only on version upgrade | No |
+| AWS Proton | No, platform team owns templates | Yes, via schema | Yes | Environment dependent |
+| Raw console access | Yes, fully | No | No | No |
 
-**Products**
-- A “product” is a CloudFormation template + version history
-- It could be as simple as an S3 bucket or as complex as a 3-tier web app
-- Products have parameters, descriptions, and constraints
+## What gets tested
 
-**Portfolios**
-- A portfolio is a collection of products
-- You assign permissions to portfolios (who can access what)
-- Portfolios can be shared across accounts via AWS Organizations
+- **Self-service without permissions.** The signature scenario: developers must provision approved infrastructure but must not be able to create those resources directly. The answer is a Service Catalog product with a launch constraint, and the distractors are IAM policies that grant the resource permissions anyway.
+- **Constraining choices.** Preventing a user from selecting an unapproved instance type, Region, or unencrypted option is a template constraint, not a Config rule and not an SCP.
+- **Enforced tagging.** TagOptions apply required tags at provisioning. Tag policies in Organizations are the org-level counterpart, and questions sometimes contrast them.
+- **Multi-account distribution.** Share the portfolio through AWS Organizations rather than recreating products per account, so updates propagate from one owner.
+- **Making it the only path.** Any question phrased as "ensure they cannot provision any other way" requires an SCP or IAM denial alongside Service Catalog. Service Catalog alone is a convenience, not a guarantee.
+- **Day-two operations.** Service actions backed by SSM Automation are the answer for letting users operate their resources without console or API permissions.
+- **Account vending.** Control Tower Account Factory is a Service Catalog product, which is how account creation is delegated safely.
+- **Least privilege on the launch role.** The launch role should be scoped to what the product actually creates. A launch role with administrative permissions turns a constrained product into a privilege escalation path.
+- **Cost.** Service Catalog itself is free, so cost is never the objection.
 
-**Constraints**
-Controls that restrict how a product can be used:
-- Launch constraints — enforce a specific IAM role
-- Template constraints — limit parameter values
-- Tag options — enforce tagging standards
-- Notification constraints — add SNS for approval/workflow alerts
+## Limitations
 
-**Provisioned Products**
-- Once a user launches a product, it becomes a provisioned product
-- These are the actual deployed stacks (CloudFormation-managed)
-
----
-
-## Security and Governance Benefits
-
-| Feature                  | Why It Matters                                                                 |
-|--------------------------|--------------------------------------------------------------------------------|
-| Least Privilege by Design | Users don’t need full IAM permissions — they launch through pre-approved roles |
-| Standardization          | Every resource is deployed with baked-in controls (logging, encryption, tags) |
-| Auditability             | CloudTrail logs all provisioning activity                                     |
-| Multi-Account Support    | Share portfolios across accounts with AWS Organizations                       |
-| Parameter Constraints    | Prevent dangerous choices (e.g., no t2.micro in prod, only encrypted volumes) |
-| Drift Detection          | Compare provisioned products to template state                                |
-
----
-
-## Where You’ll See It in Real AWS Architectures
-
-**Control Tower Integration**
-- Control Tower uses Service Catalog for Account Factory
-- New AWS accounts are “products” launched through Service Catalog with templates
-
-**DevSecOps Pipelines**
-- Security teams publish hardened templates
-- Dev teams consume them via pipelines or CLI without deviating
-
-**Regulated Environments**
-- Launch only HIPAA-compliant EC2 instances
-- RDS databases with encrypted backups
-- Templates pre-validated for compliance
-
-**ISV or Internal Developer Portals**
-- Create a custom web interface on top of Service Catalog
-- Expose curated products to internal teams or customers
-
----
-
-## Common Use Cases
-
-| Use Case                     | How Service Catalog Helps                                                    |
-|-----------------------------|------------------------------------------------------------------------------|
-| Self-Service EC2 Launching  | Developers launch hardened EC2 stacks without full AWS Console access       |
-| Multi-Account Cloud Governance | Share centralized portfolios across 50+ accounts in AWS Org              |
-| Secure VPC + Subnet Creation | Pre-configure subnets, NACLs, route tables with guardrails                 |
-| Compliance Automation        | Bake in encryption, tags, backups, and notifications into templates        |
-| Dev/Test/Prod Environment Setup | Give teams isolated, reproducible environments — standardized by design |
-
----
-
-## Real-Life Example
-
-Blizzard works on a team at **SnowySec** and needs an EC2 machine for testing. Instead of:
-- Clicking through the AWS Console
-- Forgetting encryption
-- Opening SSH to 0.0.0.0
-- Leaving cost tags blank
-
-He goes to the internal portal, sees:
-**“Linux EC2 — Standard (hardened, 30GB, encrypted, tagged, auto-stop @ 6PM)”**
-
-He clicks **"Launch."** Service Catalog:
-- Uses a pre-approved CloudFormation template
-- Deploys it with the right IAM role
-- Applies cost tags
-- Triggers GuardDuty + CloudTrail monitoring
-- Emails the security team
-
-Blizzard gets what he needs. Snowy stays compliant.
-
----
-
-Service Catalog itself is free — you only pay for:
-- The AWS resources deployed by the products
-- Underlying services like CloudFormation, S3, Lambda, etc.
-
-So it’s a governance overlay — not a billable service. **High value, no cost.**
-
----
-
-## Final Thoughts
-
-AWS Service Catalog is the cloud equivalent of giving developers a secure sandbox — with the rails already laid down.
-You get:
-- Governance without micromanagement
-- Standardization without killing creativity
-- Compliance without audits turning into nightmares
-
-It fits perfectly into secure multi-account architectures, DevSecOps, and internal developer platforms — especially in organizations scaling beyond “just one AWS account.”
+- Only as good as the templates. A product with an insecure template distributes that insecurity efficiently, which makes template review and scanning a prerequisite rather than an optimization.
+- The launch role is a privileged identity that anyone entitled to the product can indirectly exercise. Over-scoping it is the most common way this pattern is undermined.
+- Not self-enforcing. Users who retain direct API access will bypass it, so it depends on denial controls elsewhere.
+- Template maintenance is real work. Products need version updates, deprecations, and communication, and stale products push teams toward building their own.
+- Provisioned resources can still be modified afterward by anyone with permissions on those resources, so drift detection and Config remain necessary.
+- The catalog covers provisioning only. It says nothing about runtime security, data handling, or how the deployed workload is operated.
+- Parameter-driven flexibility fights standardization. Every additional parameter added to satisfy a team is another dimension where the approved product can produce an unapproved result.

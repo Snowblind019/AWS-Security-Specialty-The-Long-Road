@@ -1,197 +1,61 @@
-# AWS CloudFormation Drift Detection
+# CloudFormation Drift Detection
 
----
+Drift detection compares the resources a CloudFormation stack actually has in the account against the properties the stack's template declared, and reports where the two no longer agree. Infrastructure as code only delivers its security value if the code remains the source of truth, and it stops being the source of truth the moment someone opens a port in the console, edits an IAM policy by CLI, or disables versioning during an incident and never puts it back. Drift is how a hardened baseline silently decays into an insecure configuration while the template in Git still claims otherwise. Drift detection is the check that catches that divergence, and it is equally the evidence an auditor wants that deployed reality still matches approved design. The thing to hold onto: drift detection tells you what no longer matches the template, it does not tell you who changed it, when, or put it back.
 
-## What Is The Service
+## How it works
 
-**CloudFormation Drift Detection** is a built-in feature of AWS CloudFormation that identifies mismatches between what your template *says* your infrastructure should be and what it actually *is* in your AWS environment.
+**Two scopes, both on demand.** Stack-level detection scans every supported resource in the stack. Resource-level detection scans one logical resource. Both are asynchronous: the call returns a detection ID and you poll for the result.
 
-In simple terms: when you define your infrastructure as code (IaC) via a CloudFormation template, you’re saying, *“This is exactly how I want my resources to look and behave.”* But real-world changes happen:
-
-- A developer edits a security group rule in the console
-- A script modifies an IAM policy
-- Someone disables versioning on a bucket manually
-
-**Drift Detection** tells you when your stack's real-world state has “drifted” from its intended state — including:
-- Configuration changes
-- Deleted or missing resources
-- Property mismatches
-
-It’s essential for **cloud security**, **compliance**, **governance**, and **IaC hygiene**.
-
----
-
-## Cybersecurity and Real-World Analogy
-
-### **Cybersecurity Analogy**
-
-Imagine you’re a **CISO**. You’ve defined that *port 22 (SSH)* should never be open.
-
-But your firewall logs show someone manually opened it.
-
-There’s now a **security drift** between your documented intent and actual implementation.
-
-Drift Detection is like having an **automated compliance auditor** — one that constantly checks production against policy and flags unauthorized changes.
-
-### **Real-World Analogy**
-
-You're building a house using **blueprints**. The blueprint says, “3 windows on the north wall.”
-
-But during construction, someone installs 4.
-
-That’s *drift* — what got built doesn’t match the design.
-
-**CloudFormation Drift Detection** is your **final walkthrough** before approving the structure. It ensures that what was declared is what was delivered.
-
----
-
-## How It Works
-
-Drift Detection is available at **two levels**:
-
-- **Stack-level**: Scans all supported resources in the stack
-- **Resource-level**: Scans a single named resource in a stack
-
-It compares:
-- **Your declared desired state** (the CloudFormation template)
-- **The actual deployed state** in your AWS account
-
-If any differences are found, the resource is flagged.
-
----
-
-## Drift Status Types
-
-| **Status**     | **Meaning**                                                                      |
-|----------------|----------------------------------------------------------------------------------|
-| `IN_SYNC`      | No differences — resource matches the template                                   |
-| `MODIFIED`     | Resource exists but property values differ from the template                     |
-| `DELETED`      | Resource is missing in the environment but still exists in the template          |
-| `NOT_CHECKED`  | Drift detection hasn’t been run on this resource yet                             |
-
----
-
-## Which Resources Are Supported?
-
-Not everything can be drift-detected — but **many core services are supported**, including:
-
-- EC2 Instances
-- Security Groups
-- IAM Roles and Policies
-- S3 Buckets
-- RDS Instances
-- VPCs & Subnets
-- Route Tables
-- CloudWatch Alarms
-- Lambda Functions
-- ELBs (Elastic Load Balancers)
-
-🟣 Some complex services, nested stacks, or resources with dynamic properties may be **unsupported**.
-
-> **Rule of thumb**: If the resource has a clearly defined, static configuration — it’s likely supported.
-
----
-
-## Example Use Case
-
-You deploy a CloudFormation stack with:
-
-- ✔️ An EC2 instance with a specific tag
-- ✔️ An S3 bucket with versioning enabled
-- ✔️ A Security Group allowing only port 80
-
-Three weeks later:
-
-- ✖️ A developer manually opens port 22
-- ✖️ Versioning is turned off on the S3 bucket
-
-You run **Drift Detection**, and it reports:
-
-- `MODIFIED`: Security Group (port rules changed)
-- `MODIFIED`: S3 bucket (versioning disabled)
-
-You now have proof of drift — and can **take corrective action**.
-
----
-
-## CLI Commands
-
-### Detect drift on the full stack:
 ```bash
 aws cloudformation detect-stack-drift --stack-name myAppStack
+aws cloudformation describe-stack-drift-detection-status --stack-drift-detection-id <id>
+aws cloudformation describe-stack-resource-drifts --stack-name myAppStack
+aws cloudformation detect-stack-resource-drift --stack-name myAppStack --logical-resource-id MySecurityGroup
 ```
 
-### Check the status of drift detection:
-```bash
-aws cloudformation describe-stack-drift-detection-status \
-  --stack-drift-detection-id abc123...
-```
+**Status values differ by level.** A stack is `DRIFTED`, `IN_SYNC`, `NOT_CHECKED`, or `UNKNOWN`. A resource is `MODIFIED`, `DELETED`, `IN_SYNC`, or `NOT_CHECKED`. A single drifted resource makes the whole stack `DRIFTED`.
 
-### Detect drift on a single resource:
-```bash
-aws cloudformation detect-stack-resource-drift \
-  --stack-name myAppStack \
-  --logical-resource-id MySecurityGroup
-```
+**Results include the actual difference.** `DescribeStackResourceDrifts` returns property differences with the expected value, the actual value, and a difference type of `ADD`, `REMOVE`, or `NOT_EQUAL`. This is what makes the output usable as audit evidence rather than a bare boolean.
 
----
+**Only declared properties are checked.** If a property was never specified in the template, CloudFormation has no declared intent for it and will not flag a change to it. A resource can be meaningfully altered and still report `IN_SYNC` when the altered property was left to its default. This is the single most consequential behavior of the feature.
 
-## Security Relevance
+**Only stack resources are checked.** A resource created outside the stack is invisible to drift detection, because drift is defined relative to the template. Detecting unmanaged resources is a different problem, solved by Config or resource inventory, not by this feature.
 
-- **Enforces IaC discipline** — discourages unauthorized manual edits
-- **Detects security misconfigurations** — open CIDR ranges, disabled logs, altered IAM permissions
-- **Compliance proof** — auditors can verify that deployed infra matches defined policy
-- **Early warning system** — identify drift before it results in a misconfiguration or breach
+**Nested stacks and StackSets are supported.** Detection on a parent stack covers nested stacks as resources, and StackSets support drift detection across stack instances so a landing zone can be checked in one operation rather than account by account.
 
----
+**Nothing runs it for you.** There is no continuous mode and no automatic event when drift occurs. Operationalizing it means either scheduling detection with EventBridge Scheduler plus Lambda, or using the AWS Config managed rule `cloudformation-stack-drift-detection-check`, which periodically evaluates stacks and produces a compliance finding that can route to Security Hub and EventBridge.
+
+**Remediation is a separate decision.** Detection changes nothing. The three real responses are re-apply the template through a stack update to return managed properties to their declared values, amend the template if the change was intended and should become the new baseline, or investigate and revert manually. Choosing correctly requires knowing who made the change, which comes from CloudTrail.
+
+## Comparison
+
+| Mechanism | What it compares | Continuous | Covers resources outside the stack | Attribution |
+| --- | --- | --- | --- | --- |
+| CloudFormation drift detection | Live state against template-declared properties | No, on demand | No | No |
+| AWS Config | Live state against rules, plus full configuration history | Yes | Yes | Links to the change, paired with CloudTrail |
+| Config rule for stack drift | Stack drift status as a compliance verdict | Yes, periodic | No | No |
+| CloudTrail | API calls made | Yes | Yes | Yes, identity and time |
+| Terraform plan | Live state against declared configuration | No, on demand | Only what state tracks | No |
+| Stack policies | Nothing, they gate stack update operations | Not applicable | No | Not applicable |
+
+## What gets tested
+
+- **Drift detection versus AWS Config.** Template-relative divergence is drift detection. Continuous evaluation, configuration timelines, and coverage of resources not managed by a stack is Config. When a scenario wants ongoing automatic checking, the answer usually pairs the two: the Config managed rule evaluating drift status, not drift detection alone.
+- **Attribution.** If the question asks who changed the security group, the answer is CloudTrail. Drift detection never identifies a principal.
+- **The unspecified property trap.** Expect a scenario where a resource was changed but reports `IN_SYNC`. The cause is that the property was not declared in the template.
+- **Resources created outside the stack.** These are never reported as drift. The correct answer for unmanaged resource discovery is Config, resource import, or an inventory service.
+- **Stack policies are misunderstood on purpose.** They restrict what a stack update operation may modify. They do not prevent anyone from changing a resource directly through the console or CLI. Preventing out-of-band change is an IAM or SCP problem.
+- **Automating detection.** EventBridge Scheduler invoking Lambda that calls `detect-stack-drift` and evaluates results is the standard pattern, because CloudFormation emits no drift event on its own.
+- **StackSets.** Multi-account landing zone drift checking points to StackSet drift detection rather than per-stack calls.
+- **Cost.** Drift detection itself carries no charge, so cost is never a reason to reject it in a scenario.
 
 ## Limitations
 
-| **Limitation**                           | **Explanation**                                                                 |
-|------------------------------------------|----------------------------------------------------------------------------------|
-| Not automatic                            | You must run drift detection manually or automate it with scripts                |
-| No historical state tracking             | It shows that something drifted, but not *what the previous value was*           |
-| Doesn’t detect resources created manually | If you create a resource outside of the stack, CloudFormation won’t detect it    |
-| Not all resources supported              | Some services and dynamic resource types aren’t drift-aware yet                  |
-
----
-
-## What You Can Do About Drift
-
-Once drift is detected, you have options:
-
-| **Action**                              | **Purpose**                                                                 |
-|-----------------------------------------|------------------------------------------------------------------------------|
-| Investigate and Fix                     | Manually compare current vs template and correct the mismatch               |
-| Update Template                         | Update the template to reflect the new (drifted) state — *if intended*      |
-| Redeploy the Stack                      | Recreates/reconfigures resources to match the template                      |
-| Use Stack Policies                      | Prevent specific resources from being changed outside CloudFormation        |
-
----
-
-## Best Practices
-
-- ✔️ Automate drift checks using **Lambda + EventBridge** (cron)
-- ✔️ Integrate drift detection into your **CI/CD pipelines**
-- ✔️ Use **AWS Config** for tracking historical config changes
-- ✔️ Enable **Stack Termination Protection**
-- ✔️ Store and version your templates in **Git** for full change history
-
----
-
-## Final Thoughts
-
-**Drift Detection** may not be flashy — but it’s *foundational*.
-
-If you're serious about:
-
-- Infrastructure as Code
-- Zero-trust infrastructure
-- Regulatory compliance
-- Secure cloud governance
-
-...then you need to know *when reality starts to deviate from the blueprint*.
-
-It’s like a **routine security scan** for your infrastructure. You might not notice symptoms, but underneath, something could be misaligned.
-
-**Drift Detection** gives you that awareness — and helps you catch problems **before they become breaches.**
+- On demand only. Between runs, drift is undetected, and the window is whatever your schedule makes it.
+- Blind to properties the template does not declare, which means a clean result is not proof the resource is unchanged.
+- Blind to resources outside the stack entirely.
+- Not all resource types are supported, and support for a type does not imply every property of that type is checked.
+- No history. It reports expected against actual at the moment of the run, with no timeline of how the resource got there and no prior values beyond the template's.
+- No attribution, so every drift finding requires a CloudTrail lookup before it can be triaged.
+- No remediation. Nothing is reverted until a human or a pipeline acts, and a stack update to revert carries its own change risk.
+- Detects divergence from intent, not insecurity. A template that was insecure from the start will report `IN_SYNC` forever, which is why drift detection sits alongside Config rules and IaC scanning rather than replacing either.

@@ -1,152 +1,54 @@
-# AWS Well-Architected Tool (WAT) — Deep Dive (Snowy Edition)
+# AWS Well-Architected Tool
 
-## What Is the Service (And Why It’s Important)
+The Well-Architected Tool is a structured self-assessment: you register a workload, answer a set of best-practice questions across the six pillars of the Well-Architected Framework, and the tool identifies high and medium risk issues and generates an improvement plan linked to AWS guidance. Nothing is scanned. No resource is inspected, no API is called against your environment, and no finding is generated from live state. That is not a defect, it is the category. Config and Security Hub answer whether a resource is configured correctly; the Well-Architected Tool answers whether the architecture was designed with the right controls in mind, including things no scanner can observe, such as whether an incident response plan has ever been exercised, whether threat modeling happens, and whether the team knows where its sensitive data is. For security work it functions as a design review record and a due-diligence artifact. The thing to hold onto: this is the only assessment in AWS driven entirely by what humans assert, which makes it the only one that can cover process rather than configuration.
 
-The AWS Well-Architected Tool (WAT) is a free assessment platform that helps teams review, measure, and improve their workloads against AWS’s Well-Architected Framework — which covers six pillars:
+## How it works
 
-- Operational Excellence  
-- Security  
-- Reliability  
-- Performance Efficiency  
-- Cost Optimization  
-- Sustainability  
+**Workloads and lenses define the scope.** A workload represents a system under review. A lens supplies the question set: the Well-Architected Framework lens covers all six pillars, and specialized lenses exist for serverless, SaaS, machine learning, data analytics, financial services, and more, available through the lens catalog.
 
-Using the tool, teams answer a set of structured questions about their workload architecture. Based on those answers, the tool flags:
+**Custom lenses encode organization-specific standards.** A security team can author its own question set with its own risk rules and improvement guidance, publish it with versioning, and share it, which is how an internal architecture standard becomes a repeatable review rather than a document.
 
-- ✔️ Good practices  
-- 🟣 Medium risk issues  
-- ✖️ High Risk Issues (HRIs) that must be addressed  
+**Answers produce risk classifications.** Unselected best practices become high or medium risk issues, and the improvement plan lists them in priority order with links to the underlying guidance. Questions can be marked as not applicable with a reason, which keeps the risk count meaningful.
 
-Each question maps back to best practices from the AWS Well-Architected Framework (WAF), giving you both a snapshot of current state and a roadmap for improvement.
+**Milestones are immutable point-in-time snapshots.** Taking a milestone before a launch and again after remediation is what turns a review into evidence of progress rather than a rolling document with no history.
 
-For Snowy's organization — with many accounts, services, and regulatory constraints — this becomes a central audit and improvement tool that doesn't just track technical debt, but also helps prove due diligence and compliance.
+**Profiles and review templates add context and consistency.** A profile captures business context so questions are prioritized appropriately, and review templates let an organization start every review from a standard configuration rather than from scratch.
 
----
+**Sharing works across accounts and the organization.** Workloads, custom lenses, profiles, and templates can be shared with specific accounts, IAM principals, or, with trusted access enabled, an organization or OU. This is how a central security team reviews workloads it does not own.
 
-## Cybersecurity Analogy
+**Trusted Advisor context appears inside reviews.** The tool surfaces relevant Trusted Advisor checks alongside questions, which grounds some answers in observed data rather than pure assertion.
 
-Think of WAT like a tabletop security audit mixed with a health check.  
-You go through a structured questionnaire — but each answer has risk implications, and each section ties to security principles like:
+**The API makes it programmable.** Reviews, answers, milestones, and lenses are all accessible through the API and SDK, so review status can gate a deployment pipeline and results can be exported into a risk register or ticketing system.
 
-- Least privilege  
+## Comparison
 
-- Encryption  
-- Monitoring  
-- Incident response readiness  
-- Change control  
+| Tool | Input | What it assesses | Automated | Output |
+| --- | --- | --- | --- | --- |
+| Well-Architected Tool | Human answers to structured questions | Architecture and process design | No | Risk issues and an improvement plan |
+| Security Hub | Live resource state via controls | Current configuration posture | Yes | Findings and a security score |
+| AWS Config | Live resource state via rules | Configuration compliance and history | Yes | Compliance evaluations |
+| Audit Manager | Collected evidence mapped to controls | Whether controls can be evidenced | Yes, collection | Signed assessment reports |
+| AWS Artifact | AWS auditor reports and agreements | AWS's own compliance | Not applicable | Downloadable attestations |
+| Trusted Advisor | Fixed AWS-authored checks | Best practice deviations | Yes, periodic | Colour-coded recommendations |
 
-And the results don’t just sit in a PDF — they create a living risk register with remediation actions, owners, timestamps, and review history.  
-In high-risk orgs, WAT is the first line of defense for catching bad architecture before it ever goes live.
+## What gets tested
 
-## Real-World Analogy
+- **Self-assessment versus automated evaluation.** Any scenario requiring continuous, automatic detection of misconfiguration is Config or Security Hub. The Well-Architected Tool is the answer when the requirement is a structured architectural review or a design-stage risk assessment.
+- **Process controls.** Questions about incident response readiness, threat modeling, or team knowledge have no automated equivalent, and the Well-Architected Tool is the only service that captures them.
+- **Custom lenses.** When an organization has its own architecture standard that no AWS lens covers, the answer is authoring a custom lens, not writing Config rules, because the subject matter is design rather than resource state.
+- **Milestones.** For demonstrating improvement over time or capturing a pre-launch baseline, milestones are the mechanism. They are immutable, which is what gives them evidentiary value.
+- **Organization-wide reviews.** Enable trusted access and share workloads and lenses with the organization or an OU, rather than running disconnected per-account reviews.
+- **Pipeline gating.** The API allows a review or a milestone to be a prerequisite in a release process, which is the practical way "no major workload launches without a review" is enforced.
+- **Not a compliance certification.** It produces no attestation and satisfies no regulator by itself. Audit evidence is Audit Manager, AWS attestations are Artifact.
+- **Cost.** The tool is free, so cost never argues against using it.
 
-WAT is like a **pre-flight checklist** for cloud workloads. You walk through:
+## Limitations
 
-- Have you tested your failover systems?  
-- Are your access policies scoped to least privilege?  
-- Are your logs centralized and retained for 90 days?  
-- Do you monitor anomalies in usage patterns?  
-
-When Snowy’s security team reviews a workload, WAT helps them go from “I think it’s secure” to “we know where it’s weak and have a plan to fix it.”
-
----
-
-## How It Works
-
-The Well-Architected Tool lives in the AWS Management Console and supports:
-
-| **Feature**       | **Description**                                                                 |
-|-------------------|----------------------------------------------------------------------------------|
-| **Workloads**      | Each workload represents a system, app, or environment under review             |
-| **Lens**           | Choose the AWS Well-Architected Framework, or custom lenses (e.g. serverless, SaaS, NIST) |
-| **Questions**      | Series of best-practice-based questions per pillar                              |
-| **Risk Identification** | Based on your answers, WAT flags High Risk Issues (HRIs) or medium risks        |
-| **Improvement Plan** | The tool auto-generates a plan with actionable remediations                   |
-| **Milestones**     | Take snapshots over time to track progress (e.g. before/after a release)         |
-| **Integration**    | Supports APIs, custom lenses, Partner access, and Organizations-wide views      |
-
-**Output:**  
-
-You get a visual dashboard of:
-
-- Risk breakdown per pillar  
-- Summary of HRIs  
-- Suggested remediations  
-
-You can export results to **PDF**, **JSON**, or third-party tools.
-
----
-
-## Security and Compliance Relevance
-
-The **Security pillar** in WAT is one of the most detailed — and it maps directly to real-world security expectations like **SOC 2**, **NIST CSF**, **ISO 27001**, and **FedRAMP**.
-
-Here’s how Snowy's team uses WAT in a security governance role:
-
-| **Security Goal**                  | **How WAT Helps**                                                                 |
-|-----------------------------------|-----------------------------------------------------------------------------------|
-| Enforce encryption and IAM boundaries | Questions like “Do you encrypt data at rest/in transit?” or “How do you enforce least privilege?” |
-| Prove incident response readiness | “Have you simulated a security event in the last 12 months?”                     |
-| Maintain audit trail of reviews   | Milestones and JSON exports act as evidence for external audits                  |
-| Catch misconfigurations early     | Security pillar surfaces logging gaps, misused root accounts, missing alerts     |
-| Support compliance frameworks     | WAT Security questions align to control families like IAM, Logging, Data Protection |
-| Standardize reviews across teams | Platform team builds a consistent review process using WAT + custom lenses       |
-
----
-
-## Pricing Model
-
-**Free to use**  
-There’s no cost to use the tool — it’s included with your AWS account.
-
-You only pay for:
-
-- The AWS resources you use (e.g. CloudWatch, S3)  
-- Any third-party integrations (e.g. Jira tickets, external SIEMs)  
-
----
-
-## Real-Life Example (Snowy's Pre-Deployment Review Workflow)
-
-Snowy’s org decided:
-
-- Every major workload must go through a WAT review before launch  
-- Every quarter, all workloads get WAT re-reviewed  
-- Platform team owns the custom lenses (e.g., “Snowy Secure SaaS Lens”)  
-
-**Here’s how it works:**
-
-1. Developer team launches a new app  
-2. They open WAT, select Well-Architected Framework + Security Lens  
-3. They answer 50+ structured questions across all 6 pillars  
-
-4. **3 HRIs are flagged:**
-   - No backup verification  
-   - Overly broad IAM policy  
-
-   - No alerting on unusual API usage  
-5. WAT generates a remediation plan  
-6. Dev team links the items to Jira  
-7. After 2 weeks, they create a new milestone to show progress  
-8. Platform security team exports the review as JSON and stores it in **CodeCommit**  
-
-This becomes part of:
-
-- Deployment gate approvals  
-- Audit evidence  
-- Continuous improvement backlog  
-
----
-
-## Final Thoughts
-
-The **AWS Well-Architected Tool** is more than a checklist — it’s an evolving, actionable, auditable cloud governance platform.
-
-In Snowy’s environment — where services span accounts, teams, and compliance boundaries — WAT provides:
-
-- A structured way to evaluate architecture decisions  
-- A shared vocabulary between engineering, security, and compliance  
-- A living history of risk identification and resolution  
-
-When paired with the Well-Architected Framework Security Pillar, it becomes a powerful lens for catching missteps before they go live — and for proving you did your homework when the auditors or incident responders come knocking.
-
+- Entirely self-reported. Answers reflect what the team believes or is willing to state, and an optimistic review produces a clean result with no relationship to reality.
+- No visibility into resources. It cannot detect drift, cannot confirm an asserted control exists, and will happily record that encryption is enforced in an environment where it is not.
+- Point in time. A review ages immediately and only regains value when repeated, which makes review cadence the real control.
+- Generates no findings, no alerts, and no enforcement. The improvement plan is a backlog that competes with everything else in the backlog.
+- Question sets are broad rather than deep, so a pillar can be answered adequately while a specific serious weakness goes unmentioned.
+- Review fatigue is a genuine failure mode. Fifty-plus questions per workload per quarter tends toward copied answers, which quietly converts the process into theatre.
+- Custom lenses require ongoing authorship and versioning, and a stale custom lens encodes last year's standard as this year's requirement.
+- It informs design and records diligence. It is not a control, and nothing in an environment changes because a review was completed.

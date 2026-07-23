@@ -1,169 +1,58 @@
-# IaC Security Best Practices in AWS
+# IaC Security Best Practices
 
-## Why IaC Security Matters
+Infrastructure as code turns every provisioning decision into a reviewable, versioned artifact, which is the single biggest improvement available to cloud security governance. It also turns every mistake into a repeatable one. A wildcard IAM policy written once and committed to a shared module is deployed into forty accounts by a pipeline that never questions it, and a hardcoded credential in a template is now in Git history permanently. The security work is therefore not "review the infrastructure" but "build the path that infrastructure travels down," with checks at authoring, at merge, at deployment, and after deployment, and with an organization-level backstop for everything the earlier stages miss. The thing to hold onto: securing IaC means securing the pipeline and the identities that run it, not just the templates.
 
-Infrastructure as Code lets teams provision fast, repeatably, and at scale. But IaC also lets people:
+## How it works
 
-- Expose S3 buckets with one misconfigured line  
-- Deploy IAM roles with *:* access  
-- Leave RDS databases unencrypted  
-- Push secrets to GitHub accidentally  
+**Static analysis at authoring and pull request.** Linting with `cfn-lint` catches malformed templates. Policy-as-code scanning with CloudFormation Guard, cfn_nag, Checkov, Trivy, or KICS catches insecure patterns such as unrestricted ingress, unencrypted volumes, and wildcard actions. Amazon CodeGuru Security and Amazon Inspector code scanning cover the application and IaC files in the same repository. The control that matters is not owning a scanner, it is a branch protection rule that refuses the merge when the scan fails.
 
-IaC magnifies mistakes — because those mistakes are now codified, versioned, and automated.  
-Security in IaC isn’t about slowing down developers — it’s about scaling secure guardrails with the same velocity as your infrastructure.
+**Permission changes get a dedicated check.** IAM Access Analyzer custom policy checks belong in the pipeline as a distinct gate: `ValidatePolicy` for correctness and best practice findings, `CheckNoNewAccess` to fail a change that grants access the previous version did not, `CheckAccessNotGranted` to fail a change that grants a specific prohibited action, and `CheckNoPublicAccess` for resource policies. Generic IaC scanners do not perform this comparison.
 
----
+**Secrets are referenced, never embedded.** CloudFormation dynamic references resolve at deployment without the value entering the template: `{{resolve:secretsmanager:MySecret:SecretString:password}}` and `{{resolve:ssm-secure:MyParam:1}}`. `NoEcho` on a parameter masks console display but is not encryption and does not protect the value everywhere it travels. Repository-side scanning with git-secrets, trufflehog, or provider-native secret scanning is the compensating control for what slips through.
 
-## The Three Pillars of IaC Security
+**Terraform state is a credential store.** State files contain resource attributes in plaintext, including generated passwords and keys. Remote state belongs in an S3 bucket with KMS encryption, versioning, Block Public Access, a restrictive bucket policy, and state locking. Treat read access to state as equivalent to read access to the secrets inside it.
 
-- Prevent insecure templates from ever reaching production  
-- Control what gets deployed and who can deploy it  
-- Continuously monitor deployed resources for drift or exposure  
+**The deployment identity is scoped separately from the pipeline identity.** A CloudFormation service role passed with `--role-arn` lets CloudFormation act with permissions the pipeline principal does not itself hold, so a compromised pipeline cannot use those permissions directly. Apply a permissions boundary to deployment roles. For external CI systems, federate with IAM roles through OIDC rather than issuing long-lived access keys, and constrain the trust policy by repository, branch, and environment.
 
-Let’s break that down into tactical best practices.
+**Pre-deployment approval is structural, not procedural.** CloudFormation change sets show the diff, including replacements, before an update executes. Stack policies restrict which resources an update may modify. Termination protection blocks stack deletion. These are the CloudFormation-native equivalents of a plan review and a protected branch.
 
----
+**Proactive enforcement sits between the pipeline and the resource.** CloudFormation Hooks evaluate a stack operation and can block provisioning outright. AWS Config proactive rules evaluate a proposed configuration before creation. Control Tower proactive controls package Hooks per organizational unit. AWS Service Catalog restricts teams to pre-approved, parameterized products. These hold even when someone deploys outside the sanctioned pipeline.
 
-## 1. Shift Left — Catch Misconfigurations Before Deployment
+**Organization guardrails are the backstop.** SCPs and RCPs deny the API call, and declarative policies pin service configuration durably. They exist precisely because scanning covers only the templates that go through scanning, and no pipeline covers the console.
 
-**Use Pre-Deployment Scanning Tools**  
-Scan every template before it reaches your CI/CD pipeline:
+**Post-deployment closes the loop.** Config rules and conformance packs evaluate live state, CloudFormation drift detection compares live state to the template, Security Hub aggregates the findings, and CloudTrail attributes the change. Without drift detection the repository becomes a description of what was once true.
 
-| Tool       | Works With       | What It Checks For                                  |
-|------------|------------------|-----------------------------------------------------|
-| Checkov    | Terraform, CFN   | Open SGs, unencrypted disks, bad IAM policies       |
-| TFSec      | Terraform         | Secrets in code, dangerous modules                  |
-| CFN-Nag    | CloudFormation    | S3 public ACLs, wildcard IAM, missing logs          |
-| KICS       | Multiple formats  | Custom rules, fast scanning                         |
-| Snyk IaC   | Multi-cloud IaC   | Commercial SaaS scanning, integrations              |
-| cfn-guard  | CloudFormation    | Policy-as-code enforcement, guardrails              |
+## Comparison
 
-**Best Practice**: Integrate at pull request time. No PR merges unless IaC scan passes.
+| Layer | When it acts | Bypassable by | Best at |
+| --- | --- | --- | --- |
+| Linting and policy-as-code scan | Authoring and pull request | Deploying outside the pipeline | Catching insecure patterns cheaply, with fast feedback |
+| Access Analyzer policy checks | Pull request | Deploying outside the pipeline | Detecting permission expansion specifically |
+| CloudFormation Hooks and proactive Config rules | Stack operation, pre-provision | Non-CloudFormation deployment paths | Blocking creation with full resource context |
+| Service Catalog | Provisioning request | Direct API access if not denied | Constraining teams to approved patterns |
+| SCP, RCP, declarative policy | Every API call | Nothing inside the organization | Absolute guarantees, no exceptions |
+| Config rules and drift detection | After creation | Nothing, but it is post-hoc | Continuous assurance and audit evidence |
 
-## 2. Secrets Hygiene — Keep Credentials Out of Code
+## What gets tested
 
-**Don't Hardcode Secrets**  
-- Use AWS Systems Manager Parameter Store (SecureString) or Secrets Manager  
-- Reference them in your IaC code using parameters, variables, or dynamic lookups  
+- **Secrets in templates.** The correct answer is a dynamic reference to Secrets Manager or an SSM SecureString parameter. `NoEcho` is a distractor: it hides display, it does not protect the value.
+- **Least privilege for deployments.** Passing a CloudFormation service role so the pipeline principal need not hold the underlying resource permissions is the intended answer, often paired with a permissions boundary.
+- **External CI credentials.** IAM roles with OIDC federation and a trust policy scoped to the repository and branch, never an IAM user with long-lived keys.
+- **Preventing permission escalation in a pipeline.** IAM Access Analyzer custom policy checks, specifically `CheckNoNewAccess` and `CheckAccessNotGranted`. A generic template scanner is the weaker distractor.
+- **Blocking at provisioning rather than at merge.** CloudFormation Hooks, Config proactive rules, or Control Tower proactive controls, chosen when the requirement says the deployment itself must fail rather than the pipeline.
+- **Guaranteeing enforcement regardless of deployment path.** SCPs or declarative policies. Any answer relying on pipeline scanning fails the "regardless of how it is deployed" wording.
+- **Reviewing before an update.** Change sets. Protecting specific resources during an update is stack policies, which is a different control and a common swap in distractors.
+- **Terraform state exposure.** Encrypted S3 backend with KMS, restricted bucket policy, versioning, and locking. State is the answer whenever a scenario mentions plaintext credentials outside the template.
+- **Drift.** Manual console changes after deployment are found with CloudFormation drift detection or Config, and attributed with CloudTrail. The template repository proves nothing on its own.
+- **Approved patterns for self-service.** Service Catalog is the answer when teams must provision independently but only from vetted configurations.
 
-One leaked secret in Git = full environment compromise.
+## Limitations
 
-**Use Git Secrets Scanners**  
-- git-secrets  
-- truffleHog  
-- GitHub Advanced Security (for public repos)
-
-## 3. Least Privilege Everything
-
-**IAM Policies and Roles**  
-- Never use `Action: "*"` or `Resource: "*"` unless absolutely required  
-- Separate human roles from machine roles  
-- Define explicit service boundaries  
-
-Use managed policies sparingly. Prefer inline scoped policies you can control.
-
-**Scoped KMS Keys**  
-- Encrypt backups, EBS, S3 with CMKs  
-- Ensure only specific roles can `kms:Decrypt`
-
-## 4. Use Guardrails and Policy Enforcement
-
-**Use cfn-guard or OPA/Conftest**  
-Enforce policies like:
-
-- Must have `Encrypted: true` for EBS  
-- Must include `LoggingConfiguration` for CloudTrail or ELB  
-- Must not allow `0.0.0.0/0` unless `JustificationProvided=true`  
-
-**Service Control Policies (SCPs)**
-
-- Block creation of untagged resources  
-- Prevent use of specific IAM actions  
-- Force use of approved KMS keys
-
-## 5. Implement Change Review & Audit Trails
-
-| Control                    | Purpose                            |
-|----------------------------|-------------------------------------|
-| PR Reviews                 | Prevent mistakes, enforce 4-eyes    |
-| Git Versioning             | Full audit trail of infrastructure  |
-| GitHub Protected Branches  | Block force pushes or bypasses      |
-| Terraform Plan / CFN Change Set | See diff before apply         |
-
-Your infra is only as safe as your merge policies.
-
-## 6. Enforce Encryption Everywhere
-
-| Resource   | Encrypted By                     | Notes                                           |
-|------------|----------------------------------|-------------------------------------------------|
-| EBS        | KMS                              | Use `Encrypted: true`                           |
-| RDS        | KMS                              | Only restorable to encrypted DBs                |
-| S3         | KMS / SSE-S3                     | `BlockPublicAccess` + enforce encryption        |
-| Backups    | KMS (Vault-level or service-specific) | Use Vault Lock + CMKs                        |
-
-Encryption isn’t just data protection — it’s compliance, legal, and forensic boundary control.
-
-## 7. Use Tags and Resource Naming Conventions
-
-**Why it matters**:
-
-- Easier cost attribution  
-- Required by backup plans, IAM conditions, SCPs  
-- Helps auto-discover exposure  
-
-Enforce tag policies: `Environment`, `Owner`, `CostCenter`, `Confidentiality`
-
-## 8. Monitor Drift & Manual Changes
-
-| Tool                          | What It Does                                 |
-|-------------------------------|-----------------------------------------------|
-| CloudFormation Drift Detection| Flags resources changed outside of IaC       |
-| Terraform State + plan        | Shows drift before next apply                |
-
-| AWS Config                    | Continuously audits resource configuration   |
-
-If you’re not watching for drift, your IaC might be a lie.
-
-## 9. Restrict Access to IaC Pipelines
-
-Your IaC pipeline deploys entire environments. If compromised:
-
-- Attackers can provision backdoors  
-- Delete backups  
-- Wipe logs  
-
-- Launch massive cost attacks  
-
-**Lock it down**:
-
-- Least privilege IAM for deploy roles  
-- No direct console access to prod stacks  
-- Use session-based roles (temporary creds)  
-- Restrict pipeline execution to trusted identities  
-- MFA for all Git + CI users
-
----
-
-## 10. Automate Everything, Test Even More
-
-- Auto-lint your YAML/JSON/HCL  
-- Enforce `terraform validate` or `cfn-lint`  
-- Write unit tests for infrastructure with tools like Kitchen-Terraform or Terratest  
-- Continuously scan live resources with AWS Config, Security Hub, Trusted Advisor
-
----
-
-## Final Thoughts
-
-IaC security is not just a DevOps concern — it’s a shared responsibility between devs, platform teams, and security engineers like you.
-
-If you’re a cloud security engineer, your job is to build IaC guardrails that enable safe, fast deployments:
-
-- Secure by default  
-- Transparent via Git  
-- Auditable via commits and change sets  
-- Resilient through rollback and drift detection  
-- Hardened through encryption and IAM boundaries  
-
-**Because IaC doesn’t just define your infrastructure — it defines your attack surface.**
-
+- Every pipeline control is bypassed by anyone with console or CLI access to the target account. Without an organization-level denial, the pipeline is a convention rather than a control.
+- Scanners find known patterns. Business logic flaws, wrong trust boundaries, and correct-looking but overly broad policies pass cleanly.
+- Policy-as-code rule sets require ongoing maintenance and generate false positives that erode enforcement discipline once teams start requesting exceptions.
+- Proactive controls are path-specific. CloudFormation Hooks do not see Terraform, and Config proactive rules cover a limited resource set.
+- Deployment roles tend to accumulate permissions because a single role deploys everything. This is frequently the most privileged identity in the account and rarely the most scrutinized.
+- Drift detection reports divergence, it does not revert it, and re-applying a template to correct drift is itself a change with its own risk.
+- Git history is permanent. A secret committed and later removed remains recoverable, so remediation always means rotating the credential, not deleting the commit.
+- None of this addresses runtime security. Correctly provisioned infrastructure still needs GuardDuty, Inspector, logging, and incident response.

@@ -1,186 +1,56 @@
 # AWS Audit Manager
 
-## What Is AWS Audit Manager
+AWS Audit Manager continuously collects and organizes evidence from your AWS environment, maps it to the controls of a compliance framework, and packages the result into a signed assessment report an auditor will accept. It is the customer half of the shared responsibility model made auditable: where Artifact proves AWS meets a standard, Audit Manager proves your workloads do. Critically, it is a collector and not an evaluator. It does not judge whether a resource is compliant, it does not remediate, and it does not generate its own findings. It reaches into Config, Security Hub, CloudTrail, and service describe APIs, pulls what those systems already know, timestamps it, and files it under the control it satisfies. The thing to hold onto: Audit Manager answers "show me the proof," while Config and Security Hub answer "is this compliant right now."
 
-AWS Audit Manager is a compliance automation and evidence collection service designed to help you prepare for audits (internal or external) by continuously collecting and organizing evidence from your AWS environment.
+## How it works
 
-It takes the manual, time-consuming, “hunt through logs and screenshots” mess of compliance audits and turns it into a structured, ongoing process:
+**An assessment is the working unit.** You create one by choosing a framework, defining the scope in accounts and AWS services, naming audit owners, and specifying the S3 bucket that receives assessment reports. The assessment then runs continuously until you stop it.
 
-- It maps your controls to actual AWS services and data sources  
-- It automatically collects evidence (like CloudTrail events, resource configurations, policy documents)  
-- And it generates reports showing how your environment aligns to standards like:  
-  - CIS AWS Foundations  
-  - NIST 800-53  
-  - GDPR  
-  - ISO 27001  
-  - SOC 2  
-  - HIPAA  
+**Frameworks are prebuilt or custom.** AWS ships frameworks for CIS AWS Foundations Benchmark, NIST 800-53, NIST CSF, PCI DSS, SOC 2, ISO/IEC 27001, HIPAA, GDPR, FedRAMP, and others. Custom frameworks let you define your own control sets, either by copying and editing a prebuilt one or by authoring custom controls with your own evidence mappings and collection cadence.
 
-Whether you’re a startup prepping for SOC 2 or an enterprise with strict FedRAMP needs — Audit Manager reduces the audit panic.
+**There are exactly four automated evidence sources, plus manual.** This list is the substance of the service and worth memorizing.
 
----
+- **Compliance check.** Pulled from AWS Config rule evaluations and AWS Security Hub findings. This is the only source that carries a pass or fail verdict, and it exists only because Config and Security Hub already produced it.
+- **Configuration snapshot.** Read-only describe and list API calls against services in scope, capturing resource state such as bucket encryption settings or RDS snapshot encryption. Collected on a daily cadence.
+- **User activity.** CloudTrail events, capturing who did what, including root API usage and policy changes. Collected continuously as events arrive.
+- **Manual evidence.** Documents you supply for controls no API can prove: business continuity plans, signed attestations, vendor contracts, screenshots. Uploaded per control with a per-file size cap.
 
-## Cybersecurity Analogy
+**Evidence is immutable once collected.** It carries a timestamp, the source, and the control it maps to, and it is stored encrypted with a KMS key you can specify. Assessment reports are delivered to S3 with a SHA-256 checksum file so the auditor can validate the package has not been altered.
 
-Think of Snowy running security for a company. Every year, auditors come knocking:
+**Organizations integration runs through a delegated administrator.** You register a member account as the Audit Manager delegated admin from the management account, and that account then scopes assessments across member accounts. The management account itself cannot serve as the delegated administrator.
 
-- “Prove your S3 buckets aren’t public”  
-- “Show me logs of root API activity”  
-- “Did you enforce encryption at rest last month?”
+**Assessments are Regional.** An assessment collects evidence in the Region where it was created. Covering a multi-Region footprint means an assessment per Region, which is a frequent gap in exam scenarios describing incomplete evidence.
 
-In the old world, Snowy would:
+**Evidence finder queries the evidence store.** It supports searching across collected evidence and generating a report directly from search results, and it is backed by CloudTrail Lake. Note the enrollment change: CloudTrail Lake closed to new customers on May 31, 2026, so treat evidence finder availability as dependent on existing Lake access rather than assuming it in a greenfield design.
 
-- Grep CloudTrail logs manually  
-- Screenshot Config dashboards  
-- Email people to confirm controls  
+## Comparison
 
-But with Audit Manager, it’s like Snowy hired a full-time junior auditor who:
+| Service | Core question answered | Produces verdicts | Scope |
+| --- | --- | --- | --- |
+| AWS Audit Manager | Where is the evidence for this control | No, it collects verdicts made elsewhere | Your workloads, per Region, per assessment |
+| AWS Artifact | Does AWS itself meet this standard | Not applicable, publishes auditor reports | AWS infrastructure only |
+| AWS Config | Is this resource in a compliant configuration | Yes, per rule evaluation | Your resources, per Region |
+| Security Hub | What is my aggregated security posture | Yes, findings scored against standards | Your accounts, aggregatable cross-Region |
+| AWS Control Tower | Are guardrails enforced across the landing zone | Yes, preventive and detective controls | Organization landing zone |
 
-- Watches the environment 24/7  
-- Collects evidence continuously  
-- Fills out the compliance checklist  
-- Hands Snowy a binder when the real audit starts  
+## What gets tested
 
-No more scramble.
+- **Audit Manager versus Artifact.** Evidence about your environment is Audit Manager. Evidence about AWS is Artifact. A HIPAA scenario often needs both: the BAA and SOC report from Artifact, the workload control evidence from Audit Manager.
+- **Audit Manager versus Config and Security Hub.** If the requirement is detect and remediate non-compliant resources, the answer is Config with remediation, or Security Hub. If the requirement is assemble and hand over an evidence package, the answer is Audit Manager. Distractors will offer Audit Manager for remediation scenarios; it remediates nothing.
+- **The dependency trap.** Audit Manager does not enable Config or Security Hub. If a scenario reports empty or sparse compliance check evidence, the cause is that the upstream service is not enabled or the relevant rules and standards are not turned on.
+- **Delegated administrator.** For multi-account collection, register a delegated admin from the management account. The management account cannot be the delegated admin, and member account owners cannot self-enroll.
+- **Regional scope.** Incomplete evidence across a multi-Region deployment points to a missing per-Region assessment, not a permissions problem.
+- **Report integrity.** When the question asks how an auditor verifies the package was not tampered with, the answer is the SHA-256 checksum file delivered alongside the report, not CloudTrail log file validation and not S3 Object Lock, though Object Lock is a valid complementary answer for retention.
+- **Custom controls.** When a scenario describes an internal policy with no matching prebuilt framework, the answer is a custom framework with custom controls and defined evidence mappings.
+- **Framework updates.** AWS updating a prebuilt framework does not retroactively change assessments already running against the prior version.
 
-## Real-World Analogy
+## Limitations
 
-Imagine preparing for your tax audit.  
-If you start collecting receipts, invoices, and statements once a year, it's chaos.  
-But if your accountant logs everything as it happens — categorized, timestamped, and mapped to tax rules — you’ll be ready.  
-Audit Manager is that accountant for your cloud compliance.
-
----
-
-## How It Works
-
-1. **Select a Framework**  
-   - You start by choosing a compliance framework (e.g., CIS, NIST, ISO)  
-   - AWS provides prebuilt frameworks — but you can also create custom ones  
-
-2. **Controls Are Mapped to AWS Services**  
-   - Each control maps to AWS evidence sources:  
-     - IAM password policy  
-     - CloudTrail logs  
-     - Config rules  
-     - S3 encryption settings  
-   - Each control also defines how often to collect evidence  
-
-3. **Evidence Collection Begins**  
-   - Audit Manager monitors your account continuously  
-   - It gathers:  
-     - **Automated evidence** (resource state, logs, config history)  
-     - **Manual evidence** (upload files, screenshots, attestations)  
-   - You can see this in the evidence folder, structured by control  
-
-4. **Assessment Progress**  
-   - The dashboard shows:  
-     - % of controls covered  
-     - Evidence freshness  
-     - Passed/failed checks  
-
-5. **Export Reports**  
-   - Download full audit reports with control coverage and collected evidence  
-   - Use for:  
-     - Internal audits  
-     - External auditors  
-     - Board-level compliance presentations  
-
----
-## Key Features
-
-| **Feature**           | **Description**                                                                   |
-|------------------------|-----------------------------------------------------------------------------------|
-
-| Prebuilt Frameworks    | Supports CIS, GDPR, SOC 2, ISO 27001, PCI DSS, NIST 800-53, HIPAA                 |
-| Custom Frameworks      | Define your own control sets and evidence mappings                                |
-
-| Continuous Collection  | Evidence gathered automatically over time — not just a snapshot                   |
-
-| Multi-account Support  | Works across AWS Organizations via delegated admin                                |
-| Manual Evidence        | Upload policies, screenshots, or attestation statements manually                  |
-| Exportable Reports     | Download .zip packages with PDF/JSON of all findings                              |
-
-| Change Tracking        | View historical compliance over time                                              |
-
----
-
-## Where Audit Manager Pulls Evidence From
-
-| **Source**         | **Type of Evidence Collected**                            |
-|--------------------|-----------------------------------------------------------|
-| AWS Config         | Resource configuration, drift, compliance status          |
-| CloudTrail         | API calls, root usage, policy changes                     |
-| IAM                | Password policy, MFA enforcement, key usage               |
-| S3 / EBS / RDS     | Encryption settings, public access, versioning            |
-| GuardDuty / Macie  | Security findings, DLP status                             |
-| Manual Uploads     | Custom files, signatures, screenshots                     |
-
----
-
-## Common Use Cases
-
-| **Scenario**              | **How Audit Manager Helps**                                             |
-|---------------------------|-------------------------------------------------------------------------|
-| SOC 2 / ISO 27001 Prep     | Automates 80% of evidence gathering for controls                       |
-| Ongoing Audit Readiness    | You’re always “audit-ready,” not scrambling once a year                |
-| Internal Risk Assessments  | Build your own control sets to match internal security policies         |
-| Multi-account Compliance   | Centralized dashboard across all accounts with delegated access         |
-| Third-Party Reviews        | Package and export evidence for outside auditors                        |
-
----
-
-## Real-Life Example
-
-Snowy is preparing **SnowySec** for a SOC 2 audit. The auditor sends over a checklist:
-
-- "Prove IAM users require MFA"  
-- "Show historical activity of CloudTrail logs"  
-- "Verify RDS snapshots are encrypted"  
-- "Provide screenshots of S3 bucket versioning policies"
-
-Snowy enables **AWS Audit Manager**, selects the **SOC 2 framework**, and within minutes:
-
-- 60% of controls are already mapped  
-- Audit Manager starts collecting evidence from Config, IAM, and S3  
-- Snowy uploads the few manual documents (e.g., business continuity policy)
-
-By the time the auditor calls, Snowy sends a neatly packaged report — with timestamps, findings, and logs.  
-**Zero screenshots. Zero log dives. All automated.**
-
----
-
-## Pricing Model
-
-Audit Manager is priced based on:
-
-- Number of active AWS accounts being assessed  
-- Volume of evidence collected  
-
-| **Component**     | **Cost**                                      |
-|-------------------|-----------------------------------------------|
-| Per account       | ~$1.50/account/month (subject to region)      |
-| Evidence storage  | Charged by S3 usage + retrieval               |
-| Other services    | CloudTrail, Config, etc. billed separately    |
-
-Good news: **there’s a free tier for initial assessments** — great for testing.
-
-
----
-
-## Final Thoughts
-
-
-AWS Audit Manager turns audit prep into an **always-on discipline**.  
-It’s not just about passing compliance — it’s about **operationalizing trust**.
-
-
-Whether you're doing SOC 2, ISO 27001, HIPAA, or internal controls, this tool:
-
-
-- Automates your evidence trail  
-- Proves you’re following policy  
-- And turns audit season into just another Tuesday  
-
-If you’re serious about **compliance at scale** — especially in **multi-account environments** — Audit Manager should be part of your security strategy.
-
+- Collects evidence, does not evaluate it. Every pass or fail verdict originates in Config or Security Hub, so coverage is capped by what those services assess.
+- No remediation, no prevention, no alerting on drift. It is an evidence layer, not a control layer.
+- Regional service with per-Region assessments. Global coverage requires deliberate duplication.
+- Prebuilt framework coverage is partial. Meaningful audits still require manual evidence for policy, personnel, and process controls that no API exposes.
+- Cost scales with the volume of evidence collected and the number of resources assessed, and the upstream services generating that evidence, CloudTrail, Config, Security Hub, bill separately. Broad scope on a large organization is not cheap.
+- Evidence is retained on a fixed schedule inside the service, so long-term retention beyond that window depends on the S3 copies you control.
+- Deregistering the service can delete collected evidence. Export before decommissioning.
+- Produces no legal standing. It documents controls, it does not create the contractual coverage that agreements in Artifact provide.

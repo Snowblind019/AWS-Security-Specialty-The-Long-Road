@@ -1,124 +1,53 @@
 # AWS Artifact
 
-## What Is AWS Artifact
+AWS Artifact is the self-service portal where AWS publishes its own audit evidence: the signed compliance reports produced by the third-party auditors who assess AWS infrastructure, plus the legal agreements you sign with AWS to unlock regulated workloads. It performs no action on your account, provisions nothing, and evaluates nothing you have built. Its entire security function is to supply the provider half of the shared responsibility model in a form an auditor, a regulator, or a customer's procurement team will accept. When a security questionnaire asks whether the underlying cloud is ISO 27001 certified or SOC 2 attested, Artifact is the authoritative answer, and when a workload touches PHI, the HIPAA BAA accepted through Artifact is the legal precondition that makes the workload permissible at all. The thing to hold onto: Artifact proves AWS did its part, it never proves you did yours.
 
-AWS Artifact is your central hub for compliance and audit documentation from AWS. It gives you on-demand access to AWS’s security and compliance reports, as well as agreements like the Business Associate Addendum (BAA) for HIPAA, or NDA/DPAs for legal controls.  
-Unlike other services that perform actions, Artifact is a read-only portal designed to support compliance assurance, due diligence, risk assessments, and vendor audits.
+## How it works
 
-This is where SnowyCorp’s compliance officer goes when they need to answer:
+**Two distinct object types.** Reports are read-only artifacts AWS publishes and you download. Agreements are bilateral legal instruments you accept, which changes your account's contractual standing with AWS. Exam questions frequently hinge on which of the two a scenario needs.
 
-- “Is AWS SOC 2 Type II compliant?”  
-- “Can we legally store PHI data in S3?”  
-- “Where can I get AWS’s ISO 27001 certificate?”  
-- “Can we sign a BAA with AWS to handle HIPAA data?”
+**Reports cover provider scope only.** SOC 1 Type II (financial controls), SOC 2 Type II (security, availability, confidentiality), SOC 3 (public summary), ISO 27001, 27017, 27018 and 9001, PCI DSS Attestation of Compliance and responsibility summary, FedRAMP packages for GovCloud and US regions, plus regional frameworks including C5, IRAP, MTCS, ENS and HITRUST. Each states which AWS services are in scope, which is the detail that matters: a service outside the report's scope is not covered by that attestation even though it runs in the same account.
 
----
+**Most reports are gated behind a confidentiality term.** Downloading a SOC or PCI report requires accepting an NDA term at download time. The accepted term binds distribution, so these documents cannot be posted publicly or handed to arbitrary third parties. SOC 3 exists precisely because it is the version with no such restriction.
 
-## Cybersecurity and Real-World Analogy
+**Agreements are accepted per account or per organization.** Individual accounts accept their own agreements. Organization-wide acceptance, which covers all member accounts, can only be performed from the management account by a principal with the relevant Artifact permissions. This is the single most common trap in the agreement portion of the domain.
 
-**Cybersecurity analogy:**  
-Think of AWS Artifact as your compliance file cabinet, but in the cloud.  
-It’s full of notarized, signed documents from AWS that say:
+**Access is IAM-gated like any other service.** Relevant actions include `artifact:GetReport`, `artifact:GetReportMetadata`, `artifact:GetTermForReport`, `artifact:ListReports`, `artifact:AcceptAgreement`, `artifact:DownloadAgreement` and `artifact:TerminateAgreement`. Separating report access from agreement acceptance is a legitimate least-privilege design: compliance analysts get read on reports, legal or a delegated admin gets acceptance rights.
 
-- “Here’s proof we encrypt data”  
-- “Here’s how we maintain physical security”  
-- “Here’s who audited us last year”
+```bash
+aws artifact list-reports
+aws artifact get-report --report-id <id> --term-token <token> --version 1
+```
 
-And you can download them at any time, show them to your auditors, or use them to defend your AWS usage in risk reviews.
+**Third-party reports are a separate surface.** Artifact also exposes compliance documentation for ISV products sold through AWS Marketplace, which supports vendor risk assessment of software running on AWS rather than AWS itself.
 
-**Real-world analogy:**  
-Imagine SnowyCorp wants to bid for a healthcare contract.  
-The client asks: “Is your cloud provider HIPAA-compliant?”  
-You log into AWS Artifact, download the HIPAA BAA, SOC 2 Report, and ISO 27001 cert, then attach them to your proposal.  
-No emails. No back-and-forth. One-click trust assurance.
+**Agreements can be terminated.** Terminating a BAA removes the contractual coverage but does nothing to the data already stored, which remains your obligation to remediate.
 
----
+## Comparison
 
-## What You Can Do With AWS Artifact
+| Service | Whose compliance | Evidence type | Continuous |
+| --- | --- | --- | --- |
+| AWS Artifact | AWS itself | Third-party auditor reports, signed legal agreements | No, point in time documents |
+| AWS Audit Manager | Your workloads | Automatically collected evidence mapped to framework controls | Yes, continuous collection |
+| AWS Config | Your resources | Configuration state and rule evaluations | Yes, on change or periodic |
+| Security Hub | Your account posture | Findings scored against standards such as CIS and PCI | Yes, aggregated findings |
+| AWS Compliance Center | Public reference | Jurisdictional regulatory information | Not applicable |
 
-| **Feature**                | **What It Does**                                                                 |
-|----------------------------|----------------------------------------------------------------------------------|
-| View Reports               | Browse/download audit artifacts like SOC 1, SOC 2, ISO 27001, PCI DSS, etc.     |
-| Accept Agreements          | Programmatically accept NDAs, DPAs, HIPAA BAAs                                  |
-| Track Agreement Acceptance | See who accepted what, when, and for which accounts                             |
-| Multi-account Support      | Supports consolidated organizations for compliance tracking                     |
-| Used for Vendor Risk Management | Share documents internally or with regulators                              |
+## What gets tested
 
----
+- **Artifact versus Audit Manager.** If the question asks for proof that AWS meets a standard, the answer is Artifact. If it asks to demonstrate that your own workload meets a standard, or to assemble evidence for your own audit, the answer is Audit Manager. Audit Manager can pull Artifact into a wider audit package, but it does not replace it.
+- **Artifact versus Config and Security Hub.** Config and Security Hub assess resources you own and produce findings. Artifact produces no findings at all. Any scenario mentioning drift, non-compliant resources, or remediation is not Artifact.
+- **HIPAA scenarios.** Storing or processing PHI on AWS requires an accepted BAA. The correct sequence is accept the BAA, then restrict the workload to HIPAA eligible services, then apply encryption and access controls. Downloading the HIPAA whitepaper is not sufficient.
+- **Organization scope.** Pick management account acceptance when the requirement is that every member account is covered. Member accounts cannot accept an organization agreement on their own behalf.
+- **Distribution limits.** When a scenario needs a compliance document shareable with the public or with a party unwilling to sign an NDA, pick SOC 3 rather than SOC 2.
+- **Least privilege.** Expect distractor answers granting broad admin to enable a compliance analyst; the correct answer scopes to the specific Artifact read actions.
+- **Cost.** Artifact is free, so cost optimization is never a valid reason to choose against it.
 
-## Types of Documents in Artifact
+## Limitations
 
-
-### Reports (Read-Only)  
-These are pre-signed compliance reports from AWS auditors:
-
-
-| **Report**        | **Description**                                                              |
-|-------------------|------------------------------------------------------------------------------|
-| SOC 1 Type II     | Financial controls (relevant to finance/audit teams)                         |
-
-| SOC 2 Type II     | Security, Availability, Confidentiality controls                             |
-| ISO 27001/27017/27018 | InfoSec, Cloud, and Privacy standards                                    |
-| PCI DSS           | Proof AWS infrastructure meets PCI standards                                 |
-
-| FedRAMP           | U.S. government cloud compliance (for GovCloud)                              |
-| IRAP, MTCS, ENS, etc. | International compliance frameworks                                      |
-
-### Agreements (Signed by You)  
-These are legal agreements between your org and AWS:
-
-| **Agreement**  | **Purpose**                                              |
-|----------------|----------------------------------------------------------|
-| HIPAA BAA      | Legally required to store/process PHI on AWS             |
-| NDA            | Allows AWS to share sensitive documents                   |
-| GDPR DPA       | For personal data processing under GDPR                  |
-| CCPA Addenda   | For handling California data subjects                    |
-
----
-
-## Security & Compliance Relevance
-
-| **Area**               | **How Artifact Helps**                                                                 |
-|------------------------|-----------------------------------------------------------------------------------------|
-| Audit Readiness        | Download official auditor reports to satisfy third-party or internal audits            |
-| Due Diligence          | Use Artifact to prove AWS’s compliance stance when choosing services                   |
-| Risk Management        | Evaluate AWS risks based on real-world controls                                        |
-| Legal Compliance       | Sign HIPAA BAA or DPA for data residency/privacy requirements                          |
-| Multi-account Governance | Centrally view which accounts accepted what agreements                             |
-
-It’s especially useful when you're deploying workloads in regulated sectors: healthcare, finance, government, education, etc.
-
----
-
-## SnowyCorp Example
-
-SnowyCorp is onboarding a new client in the healthcare sector, which requires all infrastructure handling PHI to be HIPAA-compliant.  
-Here’s what they do:
-
-1. Visit AWS Artifact  
-2. Download the HIPAA Compliance Whitepaper, SOC 2, and ISO 27001 cert  
-3. Programmatically accept the HIPAA BAA on behalf of the root account  
-4. Attach these documents to the client’s audit package  
-5. Store logs of agreement acceptance in their internal GRC tool  
-
-This process shaves weeks off client onboarding, ensures legal defensibility, and improves their cloud security posture in regulated environments.
-
----
-
-## Pricing
-
-✔️ **Free.**  
-There is no cost to use AWS Artifact. All reports and agreements are freely downloadable and usable by all AWS customers.
-
----
-
-## Final Thoughts
-
-AWS Artifact is not a tool that *does* security — it’s a tool that *proves you’re doing it*.  
-It’s your evidence binder, your compliance portal, your audit defense strategy.  
-It doesn't replace encryption, firewalls, or IAM — it documents that AWS is doing its part in the shared responsibility model.
-
-You can't secure healthcare data on AWS without Artifact.  
-You can't pass audits without showing Artifact documents.  
-You can’t do real security governance without proving your infrastructure is built on certified ground — and that’s what Artifact gives you.
-
+- Read-only with respect to your environment. It cannot detect, prevent, alert, or remediate anything.
+- Reports are point-in-time attestations with defined audit periods. They go stale, and a report covering an earlier period says nothing about the current one.
+- Service scope varies per report. A newly launched service is often absent from the current attestation until the next audit cycle.
+- Accepting an agreement changes legal standing only. It applies no technical control, enforces no service restriction, and does not stop you from putting regulated data on an ineligible service.
+- NDA-covered reports carry distribution restrictions that constrain how audit packages can be shared.
+- It documents the AWS side of shared responsibility exclusively. Customer-side controls, encryption, IAM, logging, network isolation, remain entirely unevidenced by it.

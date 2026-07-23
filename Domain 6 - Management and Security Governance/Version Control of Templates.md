@@ -1,150 +1,58 @@
 # Version Control of Templates
 
-## What It Is
+Keeping CloudFormation, Terraform, and CDK definitions in Git means every change to the security perimeter has an author, a timestamp, a diff, a reviewer, and a revert path. That is the baseline claim, and it is worth stating precisely because the security value comes from properties of the repository rather than from the mere fact of using one. A repository where anyone can force-push to main, where the deploy identity is a long-lived access key in a CI secret, and where nothing links a deployed resource back to a commit provides traceability in theory and none in practice. The properties that matter are enforced review, protected history, a federated deployment identity with no standing credentials, and a stamped link from resource to commit so an incident can be traced from a CloudTrail event to the change that caused it. The thing to hold onto: Git tells you who authored a change, CloudTrail tells you which identity applied it, and you need both plus a deliberate link between them.
 
-**Version control** for Infrastructure-as-Code (**IaC**) templates refers to storing and managing **Terraform**, **CloudFormation**, or **CDK** templates in a **source-controlled repository** like Git. Each change is tracked, documented, reviewed, and auditable — just like application code.
+## How it works
 
-### Why this matters for security:
+**Protected branches carry the enforcement.** Required pull request reviews, CODEOWNERS entries routing IAM, security group, KMS, and logging changes to the security team, no force push, no deletion, no self-approval, and no administrator bypass. Without these, the review process is a suggestion.
 
-- Prevents unauthorized or accidental changes
-- Enables peer review and security audits before deploy
-- Maintains historical context and rollback options
-- Supports change tracking for compliance and incident response
-- Enables consistent pipelines across teams, accounts, and environments
+**Commit and tag integrity.** Signed commits and signed or protected tags stop history from being rewritten or a release tag from being moved to different content. This matters because a mutable tag is a common way a supposedly pinned deployment silently changes.
 
-> It’s not just about code hygiene — it’s about *infrastructure governance*.
+**The deployment identity is federated, not stored.** CI systems assume an IAM role through OIDC with a trust policy scoped to the repository, branch, and environment, so there is no long-lived key to leak. Separate roles per environment, with production behind an approval gate, is the standard separation.
 
----
+**Attribution has to be engineered.** CloudTrail records the pipeline role, not the human who opened the pull request. Setting the role session name to the workflow run or actor, or using `sts:SourceIdentity` so the value propagates through role chaining and cannot be changed by the assumer, is what makes CloudTrail answer "who" rather than "which pipeline."
 
-## Cybersecurity Analogy
+**Deployed resources carry their provenance.** Stamping the commit SHA and template version into resource tags, CloudFormation stack metadata, or an SSM parameter is what lets an investigation move from a suspicious resource to the exact change that created it, in seconds rather than by archaeology.
 
-Imagine if your company updated firewall rules by hand, no records, no approvals — and someone opened port 22 to the world.
-No audit trail. No rollback. No accountability.
+**Pipelines run a fixed sequence.** Lint and validate, policy-as-code scan, IAM Access Analyzer custom policy checks on any permission change, plan or change set, approval where required, apply, then post-deploy drift detection. Each stage is a gate, and the gates are only real if a failure blocks the merge or the deploy.
 
-Version control makes it so *every security-affecting change* is reviewed, logged, and reversible.
+**Artifacts and modules are stored immutably.** Pipeline artifacts in S3 with versioning, KMS encryption, and restricted access, shared modules in a registry or CodeArtifact with immutable versions, and consumers pinned to a specific version or commit rather than a branch.
 
-## Real-World Analogy
+**Secrets never enter the repository, and history is permanent.** Pre-commit and server-side secret scanning catch most attempts, but once a credential is committed it is recoverable regardless of later deletion, so the only correct remediation is rotation.
 
-Let’s say **Winterday** is editing a legal contract in Word, saving over the same file each time. **Blizzard** has no idea what changed or why. There’s no trail — just chaos.
+**Note the platform change.** AWS CodeCommit is closed to new customers, so current designs assume an external Git provider integrated with CodePipeline, CodeBuild, or a third-party runner rather than a CodeCommit repository.
 
-Now imagine it’s in Google Docs: version history, comments, approvals.
+## Comparison
 
-> That’s Git for your templates. Transparency. Accountability. Control.
+| Record | Answers | Retention | Covers changes made outside the pipeline |
+| --- | --- | --- | --- |
+| Git history | Who authored and approved the intended change, and why | Repository lifetime | No |
+| CloudTrail | Which identity called which API, when, from where | 90 days in event history, longer in a trail | Yes |
+| AWS Config timeline | What the resource configuration was at any point | As configured | Yes |
+| CloudFormation stack events | What the stack operation did and whether it failed | Stack lifetime | No |
+| Drift detection | Where live state no longer matches the template | Point in time, on demand | Detects them, does not attribute |
+| Resource tags with commit SHA | Which commit produced this resource | Resource lifetime | No |
 
----
+## What gets tested
 
-## Security Benefits of Template Versioning
+- **CI credentials.** OIDC federation to an IAM role with a trust policy scoped by repository and branch, never an IAM user with long-lived access keys stored in the CI system.
+- **Least privilege on deployment.** A CloudFormation service role, or a scoped deploy role with a permissions boundary, so the pipeline principal does not itself hold the resource permissions.
+- **Attribution through role chaining.** `sts:SourceIdentity` is the answer when a scenario requires the original human identity to remain visible in CloudTrail across assumed roles, since the session name alone can be set by the assuming principal.
+- **Separation of duties.** Author, approver, and deployer as distinct identities, enforced by branch protection and a manual approval action for production.
+- **Correlating an incident to a change.** Resource tags carrying the commit SHA, plus CloudTrail for the API call and Config for the configuration timeline. Git alone cannot prove what was deployed.
+- **Secrets in history.** Rotate the credential. Rewriting history or deleting the file is not remediation.
+- **Rollback reality.** Reverting a commit and redeploying is a new change with its own risk, and stateful resources may be replaced rather than restored. Change sets exist to surface exactly that before it happens.
+- **Artifact integrity.** S3 versioning, KMS encryption, and restrictive policies on the artifact bucket, since a pipeline artifact store is a direct path to production.
+- **Detecting out-of-band change.** Drift detection and Config, not the repository, because Git has no visibility into console activity.
+- **CodeCommit availability.** Recognize that new designs do not start from CodeCommit.
 
-| **Benefit**              | **Description**                                                         |
-|--------------------------|-------------------------------------------------------------------------|
-| **Change Accountability** | Every commit has an author, timestamp, and diff                         |
-| **Peer Review**           | PRs allow security team to block risky configs                          |
-| **Rollback Support**      | Easy to revert to a known-safe version                                  |
-| **CI/CD Auditability**    | Pipelines can enforce checks on every commit                            |
-| **Compliance Alignment**  | Helps meet SOC 2, ISO 27001, **HIPAA** controls                         |
-| **Separation of Duties**  | Developers write templates, security reviews, CI/CD enforces            |
-| **Diff-based Alerting**   | GitHub Actions / **CodePipeline** can alert on **IAM/SG** changes       |
+## Limitations
 
----
-
-## How to Implement Secure Version Control of **IaC**
-
-### 1. Store All **IaC** in Git
-
-- **Terraform** (`.tf`)
-- **CloudFormation** (`.yaml`, `.json`)
-- **CDK** (`.ts`, `.py`, etc.)
-
-> Use **GitHub**, **GitLab**, **CodeCommit**, or **Bitbucket**.
-
-### 2. Use Branching + Pull Requests
-
-- `main` branch is production
-- **Devs** use feature branches
-- All merges go through Pull Request + Review
-
-**Snowy’s** rule:
-
-> *No one merges to prod without a review, ever.*
-
-### 3. Enforce Reviews for Sensitive Changes
-
-Use diffs and GitHub **codeowners** to flag:
-
-- `iam:*`
-- `0.0.0.0/0` ingress
-- `s3:PutBucketAcl`
-- Disabling encryption or logging
-
-Use bots or actions to auto-warn or auto-block.
-
-### 4. Track Template Versions in Deployments
-
-Inject Git commit **SHA** or tag into:
-
-- **Terraform** variables
-- **CloudFormation** metadata
-- **SSM** Parameters
-
-So that when an issue happens, you can correlate:
-> “Template v1234 created this resource on Sep 26th at 3:01pm.”
-
-### 5. Automate CI/CD Pipelines
-
-**Examples:**
-
-- **Terraform** Plan + Apply via GitHub Actions
-- **CloudFormation** via **CodePipeline**
-- **Lint → Validate → Scan → Deploy**
-
-**Stages:**
-
-1. Run **linter** (`tfsec`, `checkov`, `cfn-lint`)
-2. Validate syntax
-3. Security scan
-4. Manual or auto-approval deploy
-5. Post-deploy drift check
-
-### 6. Tag Everything with Template Version
-
-Enforce tags like:
-
-```hcl
-Tags = {
-  IaCVersion = "v1.4.7"
-  CreatedBy  = "Terraform"
-  Environment = "Dev"
-}
-```
-
-Helps with:
-
-- Inventory analysis
-- Cost visibility
-- Incident response
-
----
-
-## Snowy’s Git Flow Example
-
-Let’s say **Snowy** wants to change the `main.tf` to allow EC2 logging to a new S3 bucket:
-
-- Creates `feature/logging-s3-update` branch
-- Pushes commit → opens PR
-- Reviewer sees: `s3:PutObject` granted, bucket is private, logging enabled
-- PR is approved → merge to `main`
-- GitHub Action runs `terraform plan`, `terraform apply`
-- Commit **SHA** `abc123` is tagged on the deployed resource
-
-> 1 week later, there’s a weird access log. They trace it to commit `abc123`, roll back to `abc122`, and issue resolved.
-
----
-
-## Final Thoughts
-
-Templates aren’t just “code” — they’re the blueprint for your security perimeter.
-
-Without version control, you’re flying blind.
-With it, you have **traceability**, **repeatability**, and **accountability**.
-
-> If you **can’t track who changed what**, then you **can’t secure your cloud**.
+- Git records intent, not reality. It proves what was approved, never what is currently running, which is why drift detection and Config are not optional companions.
+- History is permanent in both directions. It preserves the audit trail and it preserves leaked secrets.
+- Branch protection is only as strong as its bypass rules, and administrator override is the most common quiet exception.
+- The pipeline identity is frequently the most privileged principal in the account and the least reviewed, since it needs broad permissions to deploy everything.
+- Review quality is unmeasurable. An approved pull request proves someone clicked approve, not that anyone understood the IAM diff.
+- Reverting infrastructure is not symmetrical with reverting code. Deletions, replacements, and data loss make rollback a decision rather than a button.
+- None of this constrains the console. Everything in this module is bypassed by an administrator making a change directly, which is why organization-level guardrails remain the backstop.
+- Version control provides evidence and process, not enforcement. It does not prevent a bad configuration, it records who agreed to it.

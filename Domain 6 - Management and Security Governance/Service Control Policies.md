@@ -1,202 +1,89 @@
-# AWS Service Control Policies (SCPs)
+# Service Control Policies
 
-## What Is an SCP
-An SCP (Service Control Policy) is a guardrail policy attached to an AWS Organization, used to define the **maximum allowable permissions** for accounts inside that organization or organizational unit (OU). Think of it as a permission boundary — but at the **account level**, not just the role/user level.
+A service control policy is an AWS Organizations policy that defines the maximum permissions available to principals in member accounts. It grants nothing. An action succeeds only if IAM allows it and the SCP chain also allows it, which makes the SCP a ceiling that no administrator inside the account can raise, including that account's root user. This is the only mechanism in AWS that constrains an account from outside the account, which is why it carries the weight in multi-account governance: Region restriction, blocking services that have no business being used, preventing tampering with logging and security services, and stopping privilege escalation paths that IAM alone cannot close because the account admin can always rewrite IAM. The thing to hold onto: an SCP filters what principals in your accounts may do, it never decides who may reach your resources.
 
-- It **doesn’t grant permissions** on its own.
-- It **limits what IAM policies can grant** inside the account.
-- SCP = Guardrails for what IAM can even attempt to do.
+## How it works
 
-**Why this matters:**
-- Prevents accidental privilege escalation
-- Ensures compliance boundaries (e.g., “No one can create resources in `us-east-1`”)
-- Useful for delegated accounts, sandbox accounts, and child OUs
-- Critical for multi-account security and central governance (CIS, NIST, PCI-DSS, etc.)
+**Prerequisites and attachment.** AWS Organizations with all features enabled, the SCP policy type enabled, and attachment to the root, an OU, or an individual account. OU attachment is normal because it covers accounts added later.
 
----
+**Evaluation is an intersection with deny precedence.** An allow must be present at every level from the root down to the account, and IAM must independently grant the action. An explicit deny anywhere in the chain ends the evaluation. SCPs contain no `Principal` element, since they apply to every principal in scope by definition.
 
-## Cybersecurity Analogy
-Think of SCPs like a **locked cabinet of permissions** handed to each department (account). Even if someone in the department has a key (IAM permission), they can’t open drawers that are glued shut by the cabinet owner (the organization’s SCP).
+**Two strategies, chosen deliberately.** A deny list keeps the default `FullAWSAccess` attached and adds targeted denies, which is maintainable and the common choice. An allow list removes `FullAWSAccess` and enumerates permitted services, which is stronger and breaks the first time a team adopts a service nobody listed.
 
-> IAM might say:
-> “Sure, Snowy can delete an S3 bucket!”
+**Three exclusions, all heavily tested.** SCPs do not apply to the management account at all, including its root user. They do not apply to service-linked roles. They do not apply to AWS service principals acting on your behalf. Anything relying on an SCP for an absolute guarantee has to account for these.
 
-> But SCP says:
-> ❌ “No one in this account is allowed to call `s3:DeleteBucket`. Period.”
+**Region restriction needs global service exemptions.**
 
-Even the **root user is bound** by this.
-SCPs override all roles, users, and session permissions at the **boundary level**.
-
-## Real-World Analogy
-Imagine an **office building** (AWS Org) with multiple departments (accounts). Each department gets a set of keys (IAM policies) for drawers and rooms. But the **building manager installs locks** on the power grid, server room, and exit doors.
-Even if a department manager gives someone keys, if the **building-wide locks** say “no,” those keys do nothing.
-
-**SCPs are those top-level locks** — enforced before any role, user, or application gets to do anything.
-
----
-
-## How SCPs Work
-
-### 1. Only Work Inside AWS Organizations
-- SCPs **only apply** to accounts managed under **AWS Organizations**.
-- You must enable **All Features** mode (not consolidated billing only).
-
-### 2. Are Attached to OUs or Accounts
-You can attach an SCP to:
-- An **Organizational Unit (OU)**
-- An **individual account**
-
-They **cascade down** from parent → child.
-
-### 3. Control the Maximum Permissions Allowed
-- SCPs don’t grant permissions.
-- They **filter down** what IAM policies can be evaluated.
-
-### 4. Evaluation Logic: “Allow if Both Say Yes”
-> **Final Permission = SCP says "Allow" AND IAM says "Allow"**
-> If **either** says “Deny” → access is denied.
-
-### 5. Explicit Deny Always Wins
-If an SCP contains `Effect: Deny`, it overrides **everything**, including IAM `Allow`.
-
----
-
-## SCP vs IAM vs Permission Boundaries
-
-| **Feature**            | **SCP**                | **IAM Policy**         | **Permission Boundary**     |
-|------------------------|------------------------|------------------------|-----------------------------|
-| **Scope**              | Account / OU           | User / Role / Group    | Role / Session              |
-| **Evaluated By**       | AWS Org                | IAM Engine             | IAM Engine                  |
-| **Grants Permissions?**| ✖️ No                  | ✔️ Yes                 | ✖️ No                       |
-| **Can Restrict Root?** | ✔️ Yes                 | ✖️ No                  | ✖️ No                       |
-| **Use Case**           | Org-wide governance     | Access control         | Scoped delegation           |
-
----
-
-## Common Use Cases
-
-### Restrict Regions
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [{
+    "Sid": "DenyUnapprovedRegions",
     "Effect": "Deny",
-    "Action": "*",
+    "NotAction": [
+      "iam:*", "organizations:*", "sts:*", "route53:*",
+      "cloudfront:*", "support:*", "budgets:*", "health:*"
+    ],
     "Resource": "*",
     "Condition": {
-      "StringNotEquals": {
-        "aws:RequestedRegion": "us-west-2"
-      }
+      "StringNotEquals": { "aws:RequestedRegion": ["us-west-2"] }
     }
   }]
 }
 ```
-> This blocks everything that isn’t in us-west-2, no matter the IAM policy.
 
-### Block Expensive Services
-```json
-{
-  "Effect": "Deny",
-  "Action": [
-    "ec2:RunInstances",
-    "redshift:*",
-    "athena:*"
-  ],
-  "Resource": "*"
-}
-```
+**Restricting member account root uses the principal ARN.**
 
-### Prevent IAM Role Creation
-```json
-{
-  "Effect": "Deny",
-  "Action": "iam:CreateRole",
-  "Resource": "*"
-}
-```
-
-### Enforce Tagging Standards
 ```json
 {
   "Effect": "Deny",
   "Action": "*",
   "Resource": "*",
   "Condition": {
-    "StringNotEqualsIfExists": {
-      "aws:TagKeys": ["Environment", "Owner"]
-    }
+    "StringLike": { "aws:PrincipalArn": "arn:aws:iam::*:root" }
   }
 }
 ```
 
-### Ensure Root Account Can't Be Used
-```json
-{
-  "Effect": "Deny",
-  "Action": "*",
-  "Resource": "*",
-  "Condition": {
-    "StringEquals": {
-      "aws:PrincipalAccount": "123456789012",
-      "aws:PrincipalType": "Account"
-    }
-  }
-}
-```
+**Protecting security controls is a core pattern.** Deny `cloudtrail:StopLogging` and `cloudtrail:DeleteTrail`, `guardduty:DeleteDetector` and `guardduty:DisassociateFromMasterAccount`, `config:DeleteConfigurationRecorder` and `config:StopConfigurationRecorder`, and deletion of the organization's log bucket, typically with an exception for a named security role via `aws:PrincipalArn`.
 
-## Best Practices
+**Enforcing configuration uses request-time condition keys.** Deny `rds:CreateDBInstance` when `rds:StorageEncrypted` is false, deny `ec2:RunInstances` when `ec2:MetadataHttpTokens` is not `required`, deny `s3:PutObject` without the expected encryption header, deny resource creation when a required tag is absent using `aws:RequestTag`. Coverage depends entirely on whether the service publishes a usable condition key.
 
-- Use a “Deny List” model — block specific sensitive APIs or conditions
-- Avoid blanket Allow policies — SCPs should restrict, not grant
-- Test with delegated admin accounts before enforcing org-wide
--️ Use `Conditions` to limit by region, tag, VPC, IP, MFA status, etc.
-- Name policies clearly — e.g., `Deny-ECR-CrossRegion`, `Enforce-Tagging-Standards`
+**Watch the escape hatches in conditions.** `aws:ViaAWSService` distinguishes a call made directly from one made by an AWS service on the principal's behalf, and omitting it breaks legitimate service-mediated access. Conditions on MFA are risky in SCPs because automation and service roles do not carry MFA context. `StringNotEqualsIfExists` and the other `IfExists` variants matter because a request without the key otherwise fails the comparison in the wrong direction.
 
----
+**Diagnosis runs through CloudTrail.** A denial caused by an SCP appears in the CloudTrail error message as an explicit deny in a service control policy, which distinguishes it from an IAM denial. There is no dry-run mode, so rollout means attaching to a non-production OU first and reading CloudTrail.
 
-## Real-Life Example: Snowy’s Security Governance
+## Comparison
 
-Snowy’s company manages:
-- A **production OU**
-- A **sandbox OU**
+| Control | Constrains | Can grant | Restricts member account root | Applies to external principals reaching your resources |
+| --- | --- | --- | --- | --- |
+| Service control policy | Principals in member accounts | No | Yes | No |
+| Resource control policy | Access to resources in member accounts | No | Yes, as a caller | Yes |
+| IAM identity policy | One principal | Yes | No | No |
+| Permissions boundary | One identity's maximum | No | No | No |
+| Session policy | One session | No | Not applicable | No |
+| Resource-based policy | One resource | Yes | Applies to the caller | Yes |
 
-For **sandbox**:
-- SCP denies:
-  - `iam:*`
-  - `organizations:*`
-  - `ec2:RunInstances`
+## What gets tested
 
-  - **Cross-region S3**
-- IAM roles inside are free to play — but **guardrails are hard-coded**
+- **The management account exemption.** An SCP at the root does not restrict the management account. A scenario where a prohibited action succeeded almost always resolves here or to a service-linked role.
+- **SCPs do not grant.** Attaching an allow-list SCP gives nobody permissions. IAM must still grant the action, and the effective permission is the intersection.
+- **SCP versus RCP.** Preventing an outside account from reading your S3 bucket is an RCP, because the external principal is not in your organization and your SCP never evaluates for them.
+- **Region deny and global services.** The correct answer exempts global endpoints. Denying everything outside a Region breaks IAM, STS, Route 53, and CloudFront.
+- **Protecting logging.** Denying CloudTrail and Config mutation APIs, with an exception for a named break-glass or security role, is the standard answer for tamper resistance, alongside an organization trail in a separate account.
+- **Root user handling.** The principal ARN pattern restricts member account root. For removing root credentials entirely, the modern answer is centralized root access management, not an SCP.
+- **Allow list versus deny list.** Sandbox and highly regulated OUs get allow lists. General workload OUs get deny lists. Questions describing a broken deployment after a new service launch point at an allow list.
+- **Service-linked roles.** Expect a scenario where an AWS service continued operating despite an SCP. This is by design.
+- **Quotas.** Limited policies per entity and a size cap per policy force consolidation, which is why large organizations run a small number of large SCPs.
+- **Testing approach.** Attach to a non-production OU, monitor CloudTrail for explicit denies, then promote. There is no simulator that fully evaluates SCPs.
 
-For **production**:
-- SCP allows **only**:
-  - Region: `us-west-2`
-  - Approved services like **RDS**, **Lambda**, **ECS**
+## Limitations
 
-Even if someone adds a **wildcard IAM role**, it will be **ignored** if it conflicts with the SCP.
-
-Snowy’s team gets **CloudTrail logs** showing attempted violations — and tunes the guardrails accordingly.
-
----
-
-## Final Thoughts
-
-SCPs are the **silent enforcers** of AWS Organizations — often overlooked, but foundational for **serious multi-account governance**.
-
-They don’t replace IAM — they **limit its power**. Think of them as:
-- A “**maximum permissions ceiling**”
-- A way to **ensure root user restrictions**
-- Your **last line of defense** against accidental overreach
-
----
-
-If you're prepping for interviews or security reviews, expect to be asked:
-
-> **“How do you ensure accounts can’t break out of compliance?”**
-
-With SCPs, you can say:
-- Every account has a **least-privilege boundary**
-- **Root access is governed**
-- **Cross-region risk and sensitive APIs are blocked**
-- **No team can over-provision — even accidentally**
+- The management account is permanently outside SCP control, which is the strongest argument for running no workloads and storing no data there.
+- Service-linked roles bypass SCPs, so "nothing in this account can do X" is never quite true.
+- Deny-only. SCPs cannot grant, cannot remediate existing resources, and cannot express any requirement without a supporting condition key.
+- Condition key coverage is uneven across services, and the keys that exist are not always evaluated at the moment you need them, which is why declarative policies were introduced for configuration state.
+- Blast radius on error is organization-wide and immediate, with no dry run, no staged rollout mechanism, and denials that surface as confusing failures in unrelated systems.
+- Deny lists grow indefinitely and are never provably complete. Allow lists are provably complete and break constantly.
+- SCPs govern the principal side only. Data perimeters, external access, and resource exposure need RCPs and resource policies.
+- They provide no detection. Attempted violations are visible only if someone is reading CloudTrail for explicit denies.

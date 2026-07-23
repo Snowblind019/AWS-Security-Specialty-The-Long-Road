@@ -1,180 +1,60 @@
-# Security Baselines in AWS — Deep Dive (Snowy Edition)
+# Security Baselines in AWS
 
-## What Is a Security Baseline (And Why It’s Important)
+A security baseline is the defined minimum set of controls every account and workload must meet, stated explicitly rather than assumed. It is what turns "we follow best practices" into a checkable claim: root has MFA or centralized root access management, CloudTrail is on in every Region with a tamper-resistant destination, Config and GuardDuty are enabled, encryption at rest and in transit is enforced, no security group exposes administrative ports to the internet, IMDSv2 is required, and secrets live in Secrets Manager rather than environment variables. The security value is not in the list, which is broadly the same everywhere, but in whether the list is expressed as enforceable controls, measured continuously, and evidenced on demand. A baseline that exists only in a wiki is a description of what somebody intended. The thing to hold onto: a baseline becomes real at the point it is expressed as a control, measured by a service, and provable to an auditor.
 
-A **security baseline** is a standardized, predefined set of security controls, settings, and configurations that every AWS resource or environment must comply with — regardless of team, service, or workload.
+## How it works
 
-It's the **minimum viable security posture** — the default security wall you should never go below.  
-Anything more secure is a bonus. Anything less is unacceptable.
+**Baselines are sourced, not invented.** The AWS Security Reference Architecture defines the multi-account structure and where each security service belongs. The Well-Architected Security Pillar supplies design principles. CIS AWS Foundations Benchmark, AWS Foundational Security Best Practices, NIST 800-53, and PCI DSS supply the specific, testable controls. Starting from one of these and adding organization-specific requirements is faster and more defensible than writing controls from scratch.
 
-**Security baselines help ensure:**
+**They apply in four layers, and each layer needs a different mechanism.**
 
-- Consistency across teams and environments  
-- Compliance with frameworks (CIS, NIST, PCI-DSS, etc.)  
-- Least privilege access  
-- Monitoring, logging, and alerting are always in place  
-- Avoidance of misconfigurations or drift over time  
+- **Organization.** SCPs and RCPs for permission ceilings, declarative policies for pinned service configuration, tag and backup policies, Region restriction. This layer produces guarantees, because nothing inside the organization can bypass it.
+- **Account.** Delivered at bootstrap: organization CloudTrail coverage, Config recorder, GuardDuty and Security Hub through delegated administrator auto-enable, account-level settings such as EBS encryption by default and S3 Block Public Access, baseline IAM roles and Identity Center permission sets.
+- **Workload.** IaC modules, launch templates, Service Catalog products, and hardened AMIs built with EC2 Image Builder using CIS or STIG hardening components.
+- **Runtime.** SSM Patch Manager with patch baselines and maintenance windows, Amazon Inspector for vulnerability findings, GuardDuty for behavior.
 
-You can think of baselines as **“security guardrails”** that apply from **Day 0**.
+**Measurement runs through Security Hub and Config.** Security Hub enables standards such as FSBP, CIS, NIST 800-53, and PCI DSS, produces per-control status and a security score, and with central configuration applies standards and control settings to OUs from a delegated administrator rather than account by account. AWS Config conformance packs deploy rule sets organization-wide and are the right vehicle for custom rules that no standard covers.
 
----
+**Enforcement is chosen per control, deliberately.** Some baseline items can be prevented outright, some can only be detected and remediated, and some are proactive checks in a deployment path. The mapping decision is the actual engineering work: prevent where a condition key exists, pin where a declarative policy covers the attribute, detect and auto-remediate where neither does.
 
-## Cybersecurity Analogy
+**Remediation is part of the baseline, not a follow-up.** Config rules paired with SSM Automation documents, or EventBridge routing Security Hub findings to Lambda and Step Functions, are what make a detective control converge on compliance rather than accumulate findings.
 
-Imagine you’re building a new apartment complex. Every unit must, at a minimum, include:
+**Exceptions are managed, time-bound, and visible.** Security Hub controls can be disabled per standard or per account, Config rules can scope out resources by tag, and both leave a record. An untracked exception is indistinguishable from a failure, so the exception register matters as much as the control list.
 
-- Deadbolt locks on all doors  
-- Smoke detectors  
-- Fire extinguishers  
-- Carbon monoxide detectors  
-- Secure windows  
-- Evacuation maps  
+**Evidence closes the loop.** AWS Audit Manager collects Config and Security Hub verdicts, CloudTrail activity, and manual documents against framework controls and packages them into a signed report. AWS Artifact supplies the AWS side of the same picture. Together they answer the auditor without a screenshot exercise.
 
-**That’s the baseline.**  
-Tenants are free to add cameras, alarms, or watchdogs — but those base protections can’t be skipped, ever.
+**Baselines are versioned and rolled out.** A new control is announced, monitored in detect-only mode, remediated for existing violations, then enforced preventively. Skipping the monitoring phase is how a baseline change becomes an outage.
 
-## Real-World AWS Analogy
+## Comparison
 
-- Launch public EC2s without logging  
-- Store data in S3 buckets open to the world  
+| Source or standard | What it provides | Where it is enforced or measured | Typical use |
+| --- | --- | --- | --- |
+| AWS Security Reference Architecture | Multi-account structure and service placement | Design time | Deciding which account owns which security function |
+| Well-Architected Security Pillar | Principles and review questions | Design and review | Architecture review, not scored compliance |
+| AWS Foundational Security Best Practices | AWS-specific control set, broad service coverage | Security Hub standard | Default technical baseline for AWS-native estates |
+| CIS AWS Foundations Benchmark | Externally recognized scored benchmark | Security Hub standard, Config conformance pack | Audits and customers who ask for CIS specifically |
+| NIST 800-53 and PCI DSS | Regulatory control sets | Security Hub standard, Config conformance pack, Audit Manager framework | Regulated workloads and formal audits |
+| Control Tower controls | Preventive, detective, and proactive controls per OU | Organizations, Config, CloudFormation Hooks | Governed landing zones |
+| Custom Config rules | Organization-specific requirements | Config conformance pack | Anything no published standard covers |
 
-- Use default VPCs without NACLs or proper route tables  
-- Disable GuardDuty and Config  
-- Create IAM roles with wildcard privileges (`*:*`)  
+## What gets tested
 
-- Leave CloudTrail off  
+- **FSBP versus CIS.** FSBP is the broader AWS-specific default and covers more services. CIS is the externally recognized benchmark to enable when an auditor or customer names it. Enabling both is normal and produces overlapping findings, which consolidated control findings in Security Hub deduplicates.
+- **Organization-wide standards.** Security Hub central configuration from a delegated administrator applies standards and control settings across OUs, including new accounts. Per-account enablement is the wrong answer at scale.
+- **Conformance packs versus standards.** Custom or organization-specific rules go in a Config conformance pack deployed from the delegated administrator. Published benchmarks go through Security Hub standards.
+- **Evidence versus posture.** Security Hub shows current posture. Audit Manager assembles the evidence package for an audit. Artifact supplies AWS's own attestations. Questions distinguish these three cleanly.
+- **Preventive versus detective mapping.** "Must not be possible" resolves to SCP, RCP, declarative policy, or an account-level setting. "Must be identified and corrected" resolves to Config rules with SSM Automation remediation.
+- **Hardened images.** EC2 Image Builder with hardening components and a pipeline is the answer for maintaining golden AMIs, not manual snapshots.
+- **Patching as a baseline control.** SSM Patch Manager with patch baselines and maintenance windows, with compliance reported to Config and Security Hub. Inspector reports vulnerabilities, it does not patch them.
+- **New accounts.** Baseline coverage for future accounts comes from OU-attached policies, StackSets automatic deployment, and delegated administrator auto-enable, never from a per-account checklist.
+- **Exceptions.** Disabling a specific Security Hub control for a specific account is the supported answer when a control genuinely does not apply, rather than ignoring the finding.
 
-Multiply that across environments… and you've built a **chaos factory**.
+## Limitations
 
-But with a security baseline baked into every account via:
-
-- **Organizations SCPs**  
-- **AWS Config rules**  
-- **Infrastructure as Code (IaC)**  
-
-You guarantee that:
-
-- CloudTrail is enabled  
-- S3 buckets are private by default  
-- MFA is required for root accounts  
-- IAM roles follow least privilege  
-- GuardDuty + Security Hub are enabled  
-- Logging + encryption are enforced  
-
-Even if a dev team forgets — **the baseline catches them.**
-
----
-
-## What’s in a Good AWS Security Baseline?
-
-| **Category**           | **Baseline Controls** |
-|------------------------|------------------------|
-| **Identity & Access**  | Root account MFA, strong password policy, no hardcoded keys, least privilege IAM roles |
-| **Logging & Monitoring** | CloudTrail enabled, Config enabled, S3 access logs, VPC Flow Logs, GuardDuty on |
-| **Encryption**         | EBS/S3/RDS encryption at rest, HTTPS/TLS enforced in transit, KMS key rotation |
-| **Network Security**   | Default deny NACLs, strict Security Groups, no `0.0.0.0/0` SSH, private subnets preferred |
-| **Compute Hardening**  | Patch management, use of hardened AMIs, disable IMDSv1, install SSM Agent |
-| **Secrets Management** | Use Secrets Manager or SSM Parameter Store, no secrets in environment variables |
-| **Compliance**         | Use Config rules + Security Hub to enforce compliance and detect drift |
-| **Backup & Resilience** | Enable backup plans, versioning, lifecycle policies, test restores |
-
----
-
-## Where Security Baselines Come From
-
-AWS provides multiple sources and tools for building baselines:
-
-**AWS Well-Architected Framework – Security Pillar**  
-Guides secure-by-design choices for cloud workloads.
-
-**AWS Security Reference Architecture (SRA)**  
-Defines a multi-account, multi-layer security design pattern.
-
-**CIS AWS Foundations Benchmark**  
-Industry baseline. Scored assessment of 40+ controls like:
-
-- Ensure CloudTrail is enabled in all regions  
-- Ensure S3 buckets are not public  
-- Ensure IAM policies do not allow full `*:*` access  
-
-Use this as a **starting point for automated compliance.**
-
-**NIST 800-53 / ISO 27001**  
-More strict. Required for **GovCloud** and **FedRAMP** workloads.
-
----
-
-## How to Implement Security Baselines in AWS
-
-**1. Use Organizations SCPs (Service Control Policies)**  
-Apply deny rules globally.  
-*Example:* Deny EC2 without EBS encryption  
-SCPs apply **regardless** of what IAM allows.
-
-**2. Use AWS Config Rules**  
-Deploy managed (or custom) rules that check:
-
-- Whether S3 buckets block public access  
-- Whether IAM roles follow naming conventions  
-- Whether RDS instances are encrypted  
-
-Trigger remediation with **Lambda** or **Systems Manager**.
-
-**3. Use Infrastructure as Code (IaC)**  
-Define security settings in:
-
-- **CloudFormation**  
-- **Terraform**  
-- **AWS CDK**  
-
-Bake in baseline controls — encryption, logging, IAM roles — into your **IaC templates** so every deployment **inherits the baseline**.
-
-**4. Use Guardrails from AWS Control Tower**  
-If using **Control Tower**, you get built-in **preventive + detective controls** via SCPs and Config.
-
----
-
-## How to Monitor & Enforce Baselines
-
-| **Tool**           | **Purpose**                               |
-|--------------------|--------------------------------------------|
-| **AWS Config**     | Continuous compliance checks               |
-| **Security Hub**   | Central view of misconfigs + scorecard     |
-| **AWS Organizations** | Enforce SCPs across accounts           |
-| **AWS Inspector**  | Detect unpatched EC2s or vulnerable images |
-| **GuardDuty**      | Threat detection on top of misconfigs      |
-| **Audit Manager**  | Generate evidence for controls like CIS/NIST |
-
----
-
-## Real-Life Example
-
-Snowy’s company manages **12 AWS accounts** across dev/staging/prod. He sets up:
-
-- **SCPs** that deny IAM wildcard roles  
-- **Config rules** for required S3 encryption + MFA delete  
-- **CloudFormation templates** that force:  
-  - Encrypted EBS volumes  
-  - Hardened AMIs with IMDSv2 only  
-  - VPC Flow Logs  
-- **GuardDuty + Security Hub** enabled Org-wide  
-- **Compliance reports** via Security Hub and Audit Manager  
-
-Whenever a new account is created or new infra is deployed, it’s **already aligned with the baseline** — not after the fact.
-
----
-
-## Final Thoughts
-
-Security baselines are like the **immune system** of your AWS environment.
-
-They don’t stop every threat, but they raise the **minimum bar** so that:
-
-- You reduce attack surface  
-- You avoid drift and sprawl  
-- You gain visibility and control  
-- You build secure-by-default infrastructure  
-
-**Without baselines?** Every developer makes their own rules.  
-**With baselines?** Every workload starts on solid ground — and you scale securely.
-
+- Standards overlap and conflict. Running FSBP, CIS, and PCI simultaneously produces duplicated and occasionally contradictory findings, and reconciling them is ongoing work.
+- Control coverage is service-limited. New AWS services routinely appear in an estate before any standard has controls for them, leaving a gap that only custom rules fill.
+- Detective controls report, they do not converge. Without remediation wired in, a baseline produces a growing findings backlog that eventually gets ignored, which is worse than no measurement.
+- Cost scales with coverage. Config recording, Security Hub controls, GuardDuty, Inspector, and Audit Manager across every account and Region is a significant recurring expense, and scope reduction is where baselines quietly erode.
+- Preventive controls only bind forward, so every baseline version change leaves an existing non-compliant population requiring separate, sometimes destructive, remediation.
+- Exception processes tend to become permanent. A time-bound exception with no expiry mechanism is just a weaker baseline that still reports green.
+- A baseline is a floor. Meeting it says nothing about threat modeling, application security, data classification, or incident response capability, and a fully compliant environment can still be architected badly.
